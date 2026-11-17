@@ -1,0 +1,15 @@
+VidIMG
+Copyright 2026 Q8Xbox and the VidIMG contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+VidIMG does not bundle third-party programs or model weights. The setup command downloads them from their
+official releases, each under its own license:
+- Video2X 6.4.0 (AGPL-3.0), run as a separate program
+- PyTorch, spandrel (BSD-3-Clause / MIT)
+- open restoration models: BSRGAN/RealESRGAN family, SwinIR, SCUNet, NAFNet (BSD-3-Clause / Apache-2.0 / MIT,
+  see tools/free-models/manifest.json)
+- OpenCV Zoo YuNet and SFace face models (Apache-2.0)
+- VapourSynth and its plugins, optional AviSynth+ plugins (each under its own open-source license; see
+  tools/avisynth/manifest.json and tools/vapoursynth/lock.json)
+- FFmpeg (LGPL / GPL, installed by the user through winget)

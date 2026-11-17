@@ -99,3 +99,9 @@ research evidence always stay in `workspace/`.
 python -m pytest            # unit tests (no programs run)
 ```
 
+## License
+
+[Apache License 2.0](LICENSE): free to use, modify and redistribute, including commercially, with an explicit
+patent grant; keep the copyright and [NOTICE](NOTICE). Third-party programs and models are downloaded by setup
+from their official releases under their own licenses (listed in NOTICE). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
