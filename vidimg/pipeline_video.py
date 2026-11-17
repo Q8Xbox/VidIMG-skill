@@ -109,8 +109,27 @@ def is_anime(p: probe.VideoProfile, content: str = "auto") -> bool:
     return content == "anime" or (content == "auto" and "anime_like" in p.flags)
 
 
-def plan_candidates(p: probe.VideoProfile, scale: float | None = None,
-                    content: str = "auto") -> tuple[str, list[tuple[str, Callable[[], list]]]]:
+# Models a person can ask for by name (--model). Without a choice the pipeline keeps its approved order and
+# takes the first candidate that passes the guard. A named model is the only candidate: if the guard rejects
+# it, the original stays the deliverable (no silent fallback to another look).
+MODEL_CHOICES = config.VIDEO_MODEL_CHOICES
+
+
+def plan_candidates(p: probe.VideoProfile, scale: float | None = None, content: str = "auto",
+                    model: str | None = None) -> tuple[str, list[tuple[str, Callable[[], list]]]]:
+    why, cands = _plan_candidates(p, scale, content, model is not None)
+    if model is None:
+        return why, cands
+    if model not in MODEL_CHOICES:
+        raise ValueError(f"model must be one of {MODEL_CHOICES}")
+    picked = [c for c in cands if c[0].split(" ", 1)[1] == model]
+    if not picked:
+        return f"{why}; requested model {model} does not apply to this content", []
+    return f"{why}; only {model} (requested)", picked
+
+
+def _plan_candidates(p: probe.VideoProfile, scale: float | None, content: str,
+                     all_models: bool = False) -> tuple[str, list[tuple[str, Callable[[], list]]]]:
     out_h, size_note = target_size(p, scale)
     if is_anime(p, content):
         # anime / cartoon: Video2X anime models (free, Vulkan). Measured on the owner's cartoon samples
@@ -123,10 +142,15 @@ def plan_candidates(p: probe.VideoProfile, scale: float | None = None,
         why = (f"{size_note}; anime/cartoon ({'requested' if content == 'anime' else 'detected'}): "
                f"Video2X Real-ESRGAN anime-v3 x{k} first, Real-CUGAN second")
         h_out = out_h or p.height * k
-        return why + ", general-v3 third", [
+        cands = [
             ("anime esrgan-v3", lambda: [video2x.AnimeSR("realesrgan", "realesr-animevideov3", k)]),
             ("anime cugan", lambda: [video2x.AnimeSR("realcugan", "models-se", k)]),
             ("free general-v3", lambda: [free_sr.FreeSR(model="general_x4v3", height=h_out)])]
+        if all_models:
+            # Real-CUGAN pro: closer line weight and the only anime model that passed the face check on the
+            # Prince Valiant (1991) clips (identity 0.799 vs 0.687 for anime-v3); available on request only
+            cands.append(("anime cugan-pro", lambda: [video2x.AnimeSR("realcugan", "models-pro", k)]))
+        return why + ", general-v3 third", cands
     h = out_h or p.height
     # measured on this GPU (RTX 5060 Ti): the faithful non-GAN models process ~433k input pixels/s
     # (RealESRNet 0.47 fps at 720p), the compact general-v3 ~7.8 fps at 720p. Ground truth on the
@@ -357,7 +381,7 @@ def _cut(src: Path, start: float, seconds: float, dst: Path) -> None:
 
 def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encoder: str = "hevc10",
                   on_progress: Callable[[int, int], None] | None = None, log=print,
-                  scale: float | None = None, content: str = "auto") -> VideoRecord:
+                  scale: float | None = None, content: str = "auto", model: str | None = None) -> VideoRecord:
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
     work = out_dir / "work" / src.stem
@@ -376,8 +400,8 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
         if choice_file.exists():
             choice_file.unlink()               # a different file under the same name: choose again
     rec = VideoRecord(str(src), prof.to_dict(), "")
-    rec.plan, cands = plan_candidates(prof, scale, content)
-    options = {"scale": scale, "content": content}
+    rec.plan, cands = plan_candidates(prof, scale, content, model)
+    options = {"scale": scale, "content": content} | ({"model": model} if model else {})
     drawn = is_anime(prof, content)
     log(f"   plan: {rec.plan}")
     if not cands:

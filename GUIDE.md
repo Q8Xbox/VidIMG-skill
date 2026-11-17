@@ -264,6 +264,14 @@ python -m vidimg restore-video "D:/Videos/episode.mp4" --content anime --scale 2
 python -m vidimg restore-video "D:/Videos/wedding.avi" --content real --preview-only
 ```
 
+To use one specific model instead of the automatic choice (for example after comparing previews), add `--model`.
+That model is then the only candidate; if the guard rejects it, the original stays. Choices: `esrgan-v3`, `cugan`,
+`cugan-pro` (cartoons/anime), `general-v3`, `realesrnet`, `bsrnet`.
+
+```bash
+python -m vidimg restore-video "D:/Videos/episode.mp4" --content anime --scale 2 --model cugan-pro
+```
+
 ```bash
 python -m vidimg restore "D:/Photos/1995" --out "D:/VidIMG/Photos1995"
 ```

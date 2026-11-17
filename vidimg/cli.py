@@ -53,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     rvv.add_argument("--scale", type=float, help="exact output scale, e.g. 2 = twice the height (default: automatic)")
     rvv.add_argument("--content", default="auto", choices=["auto", "anime", "real"],
                      help="anime/cartoon or real footage; auto trusts the probe (conservative: real unless sure)")
+    rvv.add_argument("--model", default=None, choices=config.VIDEO_MODEL_CHOICES,
+                     help="use only this model (default: the approved order, first that passes the guard)")
 
     an = sub.add_parser("analyze", help="measured degradation profile of an image or video")
     an.add_argument("path", type=Path)
@@ -106,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"\r   frame {done}/{total} ({100 * done / total:.0f}%)", end="", flush=True)
 
         rec = pipeline_video.restore_video(a.video, out, preview_only=a.preview_only, encoder=a.encoder,
-                                           on_progress=progress, scale=a.scale, content=a.content)
+                                           on_progress=progress, scale=a.scale, content=a.content,
+                                           model=a.model)
         print()
         out.mkdir(parents=True, exist_ok=True)
         (out / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, ensure_ascii=False, default=str),

@@ -25,7 +25,7 @@ After setup the person restarts Claude Code (a cloned project also approves the 
 | Check the setup | `doctor()` | First, if anything fails or on a new machine. |
 | Understand the file | `analyze_media(path)` | Profile + the plan the pipeline will follow. For videos it also returns `frames_sheet`: **look at it** to decide cartoon/anime vs real footage. |
 | Restore photos | `restore_photos(paths, out_dir?, deblur?)` | Background job → `job_status`. `deblur=true` only when the person asks for blur removal. |
-| Restore a video | `restore_video(path, out_dir?, preview_only?, scale?, content?)` | Background job → `job_status`. `content='anime'` for cartoons/anime, `'real'` for camera footage (decide from the frames sheet); `scale=2` when the person asks for exactly 2x. Use `preview_only=true` first for long videos. |
+| Restore a video | `restore_video(path, out_dir?, preview_only?, scale?, content?, model?)` | Background job → `job_status`. `content='anime'` for cartoons/anime, `'real'` for camera footage (decide from the frames sheet); `scale=2` when the person asks for exactly 2x. Use `preview_only=true` first for long videos. `model` only when the person picks one (e.g. `cugan-pro` after comparing): it becomes the only candidate, and a guard rejection keeps the original. |
 | Follow a job | `job_status(job_id)`, `list_jobs()`, `cancel_job(job_id)`, `resume_job(job_id)` | Poll about every 30–60 s for videos, 15–30 s for photos. Jobs queue on one GPU lock; a stopped job resumes where it stopped. |
 | Judge any pair | `verify_restoration(original, result)` | For files made elsewhere. |
 | Before/after | `compare_frames(original, result)` | Image sheet with face zooms. |
