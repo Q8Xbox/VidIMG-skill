@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+workspace/
+research/craft-anything/topaz.cany/
+# tools/: everything is downloaded by python -m vidimg.setup, except the pinned manifests and SHA-256 locks
+tools/*
+!tools/free-models/
+tools/free-models/*
+!tools/free-models/manifest.json
+!tools/free-models/lock.json
+!tools/avisynth/
+tools/avisynth/*
+!tools/avisynth/manifest.json
+!tools/avisynth/lock.json
+!tools/vapoursynth/
+tools/vapoursynth/*
+!tools/vapoursynth/lock.json
+
+# machine-specific (written by setup) and private
+.mcp.json
+vidimg.local.json
+.claude/settings.local.json
+# not published: paid-software history, research evidence with personal images
+archive/
+research/
+NVIDIA Corporation/

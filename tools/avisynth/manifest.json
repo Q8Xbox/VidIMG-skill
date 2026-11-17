@@ -1,0 +1,50 @@
+{
+  "_comment": "Pinned private AviSynth+ plugin set for VidIMG (research/avisynth/03_plugins_catalogue.md, 2026-11-15). Installed into tools/avisynth/plugins and loaded by every generated script with ClearAutoloadDirs()+AddAutoloadDir(); the system AviSynth+ folders are never modified. SHA-256 values are recorded in lock.json on first download and verified afterwards.",
+  "archives": [
+    {"name": "mvtools", "version": "2.7.49", "url": "https://github.com/pinterf/mvtools/releases/download/2.7.49/mvtools-2.7.49-with-depans20261114.7z",
+     "dlls": ["mvtools2.dll", "DePan.dll", "DePanEstimate.dll"]},
+    {"name": "masktools2", "version": "2.2.30", "url": "https://github.com/pinterf/masktools/releases/download/2.2.30/masktools2_v2.2.30.7z",
+     "dlls": ["masktools2.dll"], "note": "2.3 (2026-11) changes its parameter list; scripts target 2.2.x"},
+    {"name": "RgTools", "version": "1.3", "url": "https://github.com/pinterf/RgTools/releases/download/1.3/RgTools-1.3-20261030.7z",
+     "dlls": ["RgTools.dll"]},
+    {"name": "NNEDI3", "version": "0.9.4.70", "url": "https://github.com/jpsdr/NNEDI3/releases/download/0.9.4.70/NNEDI3_v0_9_4_70.7z",
+     "dlls": ["nnedi3.dll"]},
+    {"name": "L-SMASH-Works", "version": "r1310", "url": "https://github.com/HomeOfAviSynthPlusEvolution/L-SMASH-Works/releases/download/1310.0.0.0/L-SMASH-Works-r1310.0.0.0.7z",
+     "dlls": ["LSMASHSource.dll"]},
+    {"name": "neo_FFT3D", "version": "r14", "url": "https://github.com/HomeOfAviSynthPlusEvolution/neo_FFT3D/releases/download/r14/neo_FFT3D_r14.7z",
+     "dlls": ["neo-fft3d.dll"]},
+    {"name": "neo_DFTTest", "version": "r12", "url": "https://github.com/HomeOfAviSynthPlusEvolution/neo_DFTTest/releases/download/r12/neo_DFTTest-r12.7z",
+     "dlls": ["neo-dfttest.dll"]},
+    {"name": "DCTFilter", "version": "0.5.1", "url": "https://github.com/Asd-g/DCTFilter/releases/download/0.5.1/DCTFilter-0.5.1.7z",
+     "dlls": ["DCTFilter.dll"]},
+    {"name": "TIVTC", "version": "1.0.32", "url": "https://github.com/pinterf/TIVTC/releases/download/v1.0.32/TIVTC-v1.0.32.7z",
+     "dlls": ["TIVTC.dll"]},
+    {"name": "TDeint", "version": "1.12", "url": "https://github.com/pinterf/TIVTC/releases/download/v1.0.32/TDeint-v1.12.7z",
+     "dlls": ["TDeint.dll"]},
+    {"name": "BWDIF", "version": "1.3.0", "url": "https://github.com/Asd-g/AviSynth-BWDIF/releases/download/1.3.0/BWDIF-1.3.0.7z",
+     "dlls": ["BWDIF.dll"]},
+    {"name": "vinverse", "version": "0.9.6", "url": "https://github.com/Asd-g/vinverse/releases/download/0.9.6/vinverse-0.9.6.7z",
+     "dlls": ["vinverse.dll"]},
+    {"name": "KNLMeansCL", "version": "1.1.1e", "url": "https://github.com/pinterf/KNLMeansCL/releases/download/v1.1.1e/KNLMeansCL_1.1.1e_v20201112-pfmod.7z",
+     "dlls": ["KNLMeansCL.dll"], "note": "prerelease (pinterf), OpenCL GPU"},
+    {"name": "FFTW", "version": "3.3.5", "url": "https://fftw.org/pub/fftw/fftw-3.3.5-dll64.zip",
+     "dlls": ["libfftw3f-3.dll"], "note": "needed by neo_FFT3D/neo_DFTTest; found next to the plugins"}
+  ],
+  "local_dlls": [
+    {"name": "Deblock", "from": "C:/Program Files (x86)/AviSynth+/plugins64+/Deblock.dll", "note": "no GitHub release asset upstream; copied from the existing install"}
+  ],
+  "scripts": {
+    "realfinder/AVS-Stuff": {
+      "commit": "c7df1f22081b9714df4bfe32b26ef6f18085ef11",
+      "files": ["avs 2.6 and up/QTGMC.avsi", "avs 2.5 and up/Zs_RF_Shared.avsi", "avs 2.5 and up/Deblock_QED_MT2.avsi",
+                "avs 2.5 and up/DeHalo_alpha_mt2.avsi", "avs 2.5 and up/LSFmod.avsi", "avs 2.6 and up/SpotLess_Mod.avsi",
+                "avs 2.5 and up/Srestore.avsi"]
+    },
+    "Dogway/Avisynth-Scripts": {
+      "commit": "c6a837107afbf2aeffecea182d021862e9c2fc36",
+      "files": ["ExTools.avsi", "ResizersPack.avsi", "SMDegrain/SMDegrain.avsi", "TransformsPack - Main.avsi",
+                "TransformsPack - Models.avsi", "TransformsPack - Transfers.avsi", "MasksPack.avsi", "GradePack.avsi",
+                "ScenesPack.avsi", "EX mods/LSFplus.avsi"]
+    }
+  }
+}

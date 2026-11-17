@@ -1,0 +1,12 @@
+{
+  "name": "vidimg",
+  "owner": { "name": "Q8Xbox" },
+  "metadata": { "description": "VidIMG: faithful photo and video restoration for Claude Code (free tools only)" },
+  "plugins": [
+    {
+      "name": "vidimg",
+      "source": "./",
+      "description": "Faithful photo and video restoration with a fidelity guard (free open models, Video2X, AviSynth+/VapourSynth)"
+    }
+  ]
+}

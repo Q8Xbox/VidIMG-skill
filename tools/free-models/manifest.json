@@ -1,0 +1,72 @@
+{
+  "_comment": "Free engine models for VidIMG (no paid software). Official author releases only; SHA-256 recorded in lock.json on first download and enforced afterwards (python -m vidimg.free_install). Generative face restoration (GFPGAN/CodeFormer) is deliberately absent: it changes identity, and CodeFormer is non-commercial.",
+  "models": {
+    "realesrnet_x4": {
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.1/RealESRNet_x4plus.pth",
+      "scale": 4,
+      "kind": "sr",
+      "training": "psnr",
+      "license": "BSD-3-Clause",
+      "project": "xinntao/Real-ESRGAN"
+    },
+    "realesrgan_x4": {
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+      "scale": 4,
+      "kind": "sr",
+      "training": "gan",
+      "license": "BSD-3-Clause",
+      "project": "xinntao/Real-ESRGAN"
+    },
+    "realesrgan_x2": {
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
+      "scale": 2,
+      "kind": "sr",
+      "training": "gan",
+      "license": "BSD-3-Clause",
+      "project": "xinntao/Real-ESRGAN"
+    },
+    "general_x4v3": {
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth",
+      "scale": 4,
+      "kind": "sr",
+      "training": "gan-compact",
+      "license": "BSD-3-Clause",
+      "project": "xinntao/Real-ESRGAN"
+    },
+    "bsrnet_x4": {
+      "url": "https://github.com/cszn/KAIR/releases/download/v1.0/BSRNet.pth",
+      "scale": 4,
+      "kind": "sr",
+      "training": "psnr",
+      "license": "Apache-2.0",
+      "project": "cszn/BSRGAN (KAIR)"
+    },
+    "swinir_real_x4": {
+      "url": "https://github.com/JingyunLiang/SwinIR/releases/download/v0.0/003_realSR_BSRGAN_DFO_s64w8_SwinIR-M_x4_PSNR.pth",
+      "scale": 4,
+      "kind": "sr",
+      "training": "psnr",
+      "license": "Apache-2.0",
+      "project": "JingyunLiang/SwinIR"
+    },
+    "scunet_real": {
+      "url": "https://github.com/cszn/KAIR/releases/download/v1.0/scunet_color_real_psnr.pth",
+      "scale": 1,
+      "kind": "denoise",
+      "training": "psnr",
+      "license": "Apache-2.0",
+      "project": "cszn/SCUNet (KAIR)"
+    },
+    "nafnet_gopro": {
+      "url": "https://drive.usercontent.google.com/download?id=1S0PVRbyTakYY9a82kujgZLbMihfNBLfC&export=download&confirm=t",
+      "file": "NAFNet-GoPro-width64.pth",
+      "scale": 1,
+      "kind": "deblur",
+      "training": "psnr",
+      "license": "MIT",
+      "project": "megvii-research/NAFNet (official README link)",
+      "optional": true,
+      "note": "opt-in photo deblur step (PLAN.md 3.6); SHA-256 329d3ab4077b8d6b7ff61de376e483714667960bf85be027bf4335cda701196f at first download"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/vidimg/hooks/pretool.py\"",
+            "timeout": 10,
+            "statusMessage": "VidIMG media-safety check"
+          }
+        ]
+      }
+    ]
+  }
+}

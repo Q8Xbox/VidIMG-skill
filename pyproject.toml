@@ -1,0 +1,22 @@
+[project]
+name = "vidimg"
+version = "0.1.0"
+description = "Faithful photo and video restoration with free open models, Video2X and AviSynth+/VapourSynth, for Claude Code"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "opencv-python>=4.10",
+    "scikit-image",
+    "pillow",
+    "mcp",
+]
+
+[project.scripts]
+vidimg = "vidimg.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: runs the real models / Video2X on the GPU (slow)",
+]
+addopts = "-m 'not live'"

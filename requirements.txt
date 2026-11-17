@@ -1,0 +1,10 @@
+# VidIMG main environment (Python 3.14, Windows x64). Versions verified 2026-11-15.
+# The GPU model runtime lives in its own environment: see requirements-free-gpu.txt / python -m vidimg.free_install
+numpy==2.5.4
+opencv-python==5.0.0.93        # YuNet / SFace face models, image I/O
+pillow==12.2.0
+scikit-image==0.26.0           # guard: SSIM
+scipy==1.17.1
+mcp==1.29.0                    # Claude Code integration (MCP server)
+py7zr==1.1.4                   # fallback extractor (7-Zip is used when present)
+pytest==9.1.1                  # tests
