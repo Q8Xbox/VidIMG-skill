@@ -1,6 +1,6 @@
 {
   "name": "vidimg",
-  "owner": { "name": "Q8Xbox" },
+  "owner": { "name": "Fahad S. Aldhafeeri" },
   "metadata": { "description": "VidIMG: faithful photo and video restoration for Claude Code (free tools only)" },
   "plugins": [
     {
