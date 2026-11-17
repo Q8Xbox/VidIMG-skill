@@ -4,7 +4,7 @@
   "version": "0.2.0",
   "description": "Restore personal photos and videos faithfully (upscale, denoise, deinterlace) with free open models, Video2X and AviSynth+/VapourSynth. Every result is checked by a fidelity guard: faces, colours, frames, audio and aspect must stay the same. Windows + NVIDIA GPU.",
   "author": {
-    "name": "Q8Xbox"
+    "name": "Fahad S. Aldhafeeri"
   },
   "repository": "https://github.com/Q8Xbox/VidIMG-skill",
   "license": "Apache-2.0",
