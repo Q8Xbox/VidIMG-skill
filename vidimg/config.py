@@ -85,6 +85,10 @@ def classical_engines() -> tuple[str, ...]:
     return names
 
 
+# Video models a person can ask for by name (restore-video --model / restore_video(model=...)); the default is
+# the approved order, first candidate that passes the guard
+VIDEO_MODEL_CHOICES = ("esrgan-v3", "cugan", "cugan-pro", "general-v3", "realesrnet", "bsrnet")
+
 # Video2X processors that must never touch real human faces (benchmark: identity 0.77-0.81).
 VIDEO2X_ANIME_ONLY = frozenset({"realesrgan", "realcugan", "libplacebo"})
 

@@ -132,7 +132,7 @@ def restore_photos(paths: list[str], out_dir: str | None = None, deblur: bool = 
 
 @mcp.tool()
 def restore_video(path: str, out_dir: str | None = None, preview_only: bool = False,
-                  scale: float | None = None, content: str = "auto") -> dict:
+                  scale: float | None = None, content: str = "auto", model: str | None = None) -> dict:
     """Start a background job restoring one video: analyse; classical field handling first when needed
     (QTGMC for interlace, TFM+TDecimate for telecine); open-model candidates on three guarded preview
     segments (the faithful non-GAN models when their estimated run fits, otherwise Real-ESRGAN general;
@@ -141,14 +141,20 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     preview_only=True stops after choosing the model.
     scale: exact output scale (2 = twice the height); default automatic (SD x2, 720p-class to 1080p).
     content: 'anime' for cartoons/anime (Video2X anime models), 'real' for camera footage, 'auto' to trust the
-    probe. Decide it by looking at analyze_media's frames_sheet first. Returns the job; poll job_status(job_id)."""
+    probe. Decide it by looking at analyze_media's frames_sheet first.
+    model: only when the person asks for a specific model (e.g. after comparing previews): one of
+    esrgan-v3, cugan, cugan-pro (anime/cartoon), general-v3, realesrnet, bsrnet. That model is then the only
+    candidate; if the guard rejects it the original stays. Returns the job; poll job_status(job_id)."""
     src = _existing(path)
     if src.suffix.lower() not in VIDEO_EXT:
         raise ValueError(f"not a video: {src.name}")
     out = _out_dir(out_dir, [src], "review_video")
     if content not in ("auto", "anime", "real"):
         raise ValueError("content must be auto, anime or real")
-    args = [str(src)] + (["--preview-only"] if preview_only else []) + (["--scale", f"{scale:g}"] if scale else [])         + (["--content", content] if content != "auto" else [])
+    if model is not None and model not in config.VIDEO_MODEL_CHOICES:
+        raise ValueError(f"model must be one of {config.VIDEO_MODEL_CHOICES}")
+    args = ([str(src)] + (["--preview-only"] if preview_only else []) + (["--scale", f"{scale:g}"] if scale else [])
+            + (["--content", content] if content != "auto" else []) + (["--model", model] if model else []))
     return jobs.start("restore-video", args, out, src.name)
 
 

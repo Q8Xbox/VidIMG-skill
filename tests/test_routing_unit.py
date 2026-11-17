@@ -99,3 +99,20 @@ def test_pixel_aspect_is_kept():
     assert abs(media.display_aspect(lost) / media.display_aspect(pal) - 1) > 0.05     # 5:4 vs 4:3
     vhs = {"width": 720, "height": 544, "sar": "11696:11565"}                          # owner's Sample06
     assert abs(media.display_aspect({**vhs, "width": 1440, "height": 1088}) - media.display_aspect(vhs)) < 1e-9
+
+
+def test_named_model_is_the_only_candidate():
+    p = _vp(480, ["faces"])
+    # default order is unchanged and cugan-pro is not in it
+    assert [c[0] for c in pv.plan_candidates(p, scale=2, content="anime")[1]] == [
+        "anime esrgan-v3", "anime cugan", "free general-v3"]
+    why, cands = pv.plan_candidates(p, scale=2, content="anime", model="cugan-pro")
+    assert [c[0] for c in cands] == ["anime cugan-pro"] and "requested" in why
+    s = cands[0][1]()[0]
+    assert s.processor == "realcugan" and s.model == "models-pro" and s.scale == 2
+    # a model that does not apply to the content gives no candidate (the original stays), not a silent fallback
+    assert pv.plan_candidates(_vp(480, []), scale=2, content="real", model="cugan-pro")[1] == []
+    assert [c[0] for c in pv.plan_candidates(_vp(480, []), scale=2, content="real", model="bsrnet")[1]] == ["free bsrnet"]
+    import pytest
+    with pytest.raises(ValueError):
+        pv.plan_candidates(p, scale=2, content="anime", model="gfpgan")

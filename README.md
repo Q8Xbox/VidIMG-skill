@@ -66,7 +66,7 @@ Safety hook (`.claude/settings.json` → `vidimg/hooks/pretool.py`), before ever
 ```bash
 python -m vidimg doctor                                            # environment report
 python -m vidimg restore PHOTOS_OR_FOLDERS [--out DIR] [--deblur]  # photo pipeline + review page (--deblur: opt-in, soft photos only)
-python -m vidimg restore-video IN.mp4 [--out DIR] [--preview-only] [--scale 2] [--content anime|real|auto]
+python -m vidimg restore-video IN.mp4 [--out DIR] [--preview-only] [--scale 2] [--content anime|real|auto] [--model NAME]
                                                                    # video pipeline + report.html
 python -m vidimg analyze FILE                                      # degradation profile and plan
 python -m vidimg verify ORIGINAL RESULT                            # fidelity guard on any pair
