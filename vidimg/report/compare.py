@@ -57,86 +57,86 @@ def sheet(original: Path, restored: Path, out: Path, title: str = "") -> Path:
     return out
 
 
-GATE_AR = {"identity": "تطابق الهوية", "landmarks": "ملامح الوجه", "face_backprojection": "بنية الوجه",
-           "backprojection": "البنية العامة", "color": "الألوان", "hallucination": "تفاصيل مخترعة",
-           "eye_color": "لون العينين"}
+GATE_NAMES = {"identity": "Identity match", "landmarks": "Facial landmarks", "face_backprojection": "Face structure",
+              "backprojection": "Overall structure", "color": "Colours", "hallucination": "Invented detail",
+              "eye_color": "Eye colour"}
+
+_STYLE = """:root{{--bg:#f6f7f9;--fg:#1d2330;--card:#fff;--line:#dfe3ea}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#14171c;--fg:#e8ebf0;--card:#1d2128;--line:#2c323c}}}}
+body{{background:var(--bg);color:var(--fg);font-family:system-ui,"Segoe UI",Tahoma,sans-serif;margin:0;padding:16px;line-height:1.6}}
+main{{max-width:1840px;margin:auto}} section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}}"""
 
 
 def review_page(records: list[dict], sheets: dict[str, Path], out: Path) -> Path:
-    """Local HTML page (right-to-left Arabic) with every sheet and the guard's decision."""
+    """Local HTML page (English) with every sheet and the guard's decision."""
     cards = []
     for r in records:
         name = Path(r["source"]).name
         def verdict(a: dict) -> str:
             if not a["passed"]:
-                return "رُفض: " + "، ".join(GATE_AR.get(g, g) for g in a["failed_gates"]) if a["failed_gates"] else "خطأ"
+                return "rejected: " + ", ".join(GATE_NAMES.get(g, g) for g in a["failed_gates"]) if a["failed_gates"] else "error"
             warns = a.get("warnings") or []
-            return "نجح" + (" مع تنبيه: " + "، ".join(GATE_AR.get(g, g) for g in warns) if warns else "")
-        tried = " ← ".join(f"{a['label']} ({verdict(a)})" for a in r["attempts"]) or "—"
-        status = "✅ اجتاز الحارس" if r["passed"] else "⛔ لم يجتز الحارس: الأصل يبقى كما هو"
+            return "passed" + (" with a warning: " + ", ".join(GATE_NAMES.get(g, g) for g in warns) if warns else "")
+        tried = " → ".join(f"{a['label']} ({verdict(a)})" for a in r["attempts"]) or "—"
+        status = "✅ Passed the guard" if r["passed"] else "⛔ Did not pass the guard: the original stays as it is"
         last = next((a for a in reversed(r["attempts"]) if a.get("gates")), None)
         idv = last["gates"].get("identity", {}).get("value") if last else None
         img = f'<img src="{html.escape(sheets[name].name)}" loading="lazy">' if name in sheets else ""
         cards.append(f"""<section><h2>{html.escape(name)}</h2><p class="st">{status}</p>
-<p>الخطة: <span dir="ltr">{html.escape(r['plan'])}</span></p><p>المحاولات: <span dir="ltr">{html.escape(tried)}</span></p>
-<p>تطابق الهوية (أسوأ وجه): <b dir="ltr">{idv if idv is not None else '—'}</b></p>{img}</section>""")
+<p>Plan: {html.escape(r['plan'])}</p><p>Attempts: {html.escape(tried)}</p>
+<p>Identity match (worst face): <b>{idv if idv is not None else '—'}</b></p>{img}</section>""")
     passed = sum(r["passed"] for r in records)
-    page = f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>مراجعة الاستعادة</title><style>
-:root{{--bg:#f6f7f9;--fg:#1d2330;--card:#fff;--line:#dfe3ea}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#14171c;--fg:#e8ebf0;--card:#1d2128;--line:#2c323c}}}}
-body{{background:var(--bg);color:var(--fg);font-family:system-ui,"Segoe UI",Tahoma,sans-serif;margin:0;padding:16px;line-height:1.6}}
-main{{max-width:1840px;margin:auto}} section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}}
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Restoration Review</title><style>
+{_STYLE.format()}
 img{{width:100%;height:auto;border-radius:6px}} h2{{margin:0 0 4px;font-size:1.05rem}} .st{{font-weight:600}}</style></head>
-<body><main><h1>مراجعة استعادة الصور</h1>
-<p>{passed} من {len(records)} صورة اجتازت حارس الأمانة. في كل بطاقة: الأصل مكبَّراً (يسار) والناتج (يمين)، ثم الوجوه مكبَّرة: قبل / بعد.
-احكم أنت: هل بقيت الملامح نفسها؟</p>{''.join(cards)}</main></body></html>"""
+<body><main><h1>Photo restoration review</h1>
+<p>{passed} of {len(records)} photos passed the fidelity guard. Each card shows the original enlarged (left) and the result
+(right), then the faces zoomed in: before / after. You decide: do the faces still look the same?</p>{''.join(cards)}</main></body></html>"""
     out.write_text(page, encoding="utf-8")
     return out
 
 
-VIDEO_GATE_AR = {**GATE_AR, "frames": "عدد الإطارات", "duration": "المدة", "audio": "الصوت", "flicker": "الوميض",
-                 "vmaf": "VMAF (الجودة المدركة)"}
-STATUS_AR = {"pass": "✅", "warn": "⚠️", "fail": "⛔", "n/a": "—"}
+VIDEO_GATE_NAMES = {**GATE_NAMES, "frames": "Frame count", "duration": "Duration", "audio": "Audio",
+                    "timestamps": "Timestamps", "av_sync": "Lip sync (A/V offset)", "aspect": "Aspect ratio",
+                    "flicker": "Flicker", "vmaf": "VMAF (perceived quality)"}
+STATUS_ICON = {"pass": "✅", "warn": "⚠️", "fail": "⛔", "n/a": "—"}
 
 
 def video_page(rec: dict, out: Path) -> Path:
-    """Arabic (right-to-left) report for one video run: plan, classical pre-pass, previews, final gates, sheets."""
+    """English report for one video run: plan, classical pre-pass, previews, final gates, sheets."""
     pre = rec.get("prepass") or {}
     rows = "".join(
-        f"<tr><td>{STATUS_AR.get(g.get('status'), '')}</td><td>{html.escape(VIDEO_GATE_AR.get(k, k))}</td>"
-        f"<td dir='ltr'>{g.get('value')}</td><td dir='ltr'>{g.get('threshold', '')}</td></tr>"
+        f"<tr><td>{STATUS_ICON.get(g.get('status'), '')}</td><td>{html.escape(VIDEO_GATE_NAMES.get(k, k))}</td>"
+        f"<td>{g.get('value')}</td><td>{g.get('threshold', '')}</td></tr>"
         for k, g in (rec.get("final_gates") or {}).items())
     atts = "".join(
-        f"<li dir='ltr'>{html.escape(a['label'])}: {a['passed_previews']}/{a['previews']} previews · VMAF {a.get('vmaf')}"
+        f"<li>{html.escape(a['label'])}: {a['passed_previews']}/{a['previews']} previews · VMAF {a.get('vmaf')}"
         f"{' · ' + html.escape('; '.join(','.join(f) for f in a['failed'] if f)) if any(a['failed']) else ''}</li>"
         for a in rec.get("attempts") or [])
     imgs = "".join(f'<img src="{html.escape(Path(s).relative_to(out.parent).as_posix() if Path(s).is_relative_to(out.parent) else Path(s).as_uri())}" loading="lazy">'
                    for s in rec.get("sheets") or [])
     if rec.get("passed"):
-        status = "✅ اجتاز الحارس وسُلّم"
+        status = "✅ Passed the guard and delivered"
     elif rec.get("chosen") and not rec.get("final_gates"):
-        status = "🔎 معاينة فقط: لم يبدأ التشغيل الكامل"
+        status = "🔎 Preview only: the full run was not started"
     else:
-        status = "⛔ لم يُسلَّم: الأصل يبقى كما هو"
+        status = "⛔ Not delivered: the original stays as it is"
     notes = "".join(f"<li>{html.escape(n)}</li>" for n in rec.get("notes") or [])
-    pre_html = (f"<p>المعالجة الأولى: <span dir='ltr'>{html.escape(str(pre.get('plan')))}</span> · المحرك: "
-                f"<b dir='ltr'>{html.escape(str(pre.get('engine')))}</b> · الحارس: "
+    pre_html = (f"<p>Classical pre-pass: {html.escape(str(pre.get('plan')))} · engine: "
+                f"<b>{html.escape(str(pre.get('engine')))}</b> · guard: "
                 f"{'✅' if pre.get('guard_passed') else '⛔'}</p>") if pre.get("plan") else ""
-    page = f"""<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>تقرير الفيديو</title><style>
-:root{{--bg:#f6f7f9;--fg:#1d2330;--card:#fff;--line:#dfe3ea}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#14171c;--fg:#e8ebf0;--card:#1d2128;--line:#2c323c}}}}
-body{{background:var(--bg);color:var(--fg);font-family:system-ui,"Segoe UI",Tahoma,sans-serif;margin:0;padding:16px;line-height:1.6}}
-main{{max-width:1840px;margin:auto}} section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}}
-table{{border-collapse:collapse}} td{{border-bottom:1px solid var(--line);padding:4px 10px}}
+    page = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Video Restoration Report</title><style>
+{_STYLE.format()}
+table{{border-collapse:collapse}} th,td{{border-bottom:1px solid var(--line);padding:4px 10px;text-align:left}}
 img{{width:100%;height:auto;border-radius:6px;margin:8px 0}}</style></head>
-<body><main><h1>تقرير استعادة الفيديو: <span dir="ltr">{html.escape(Path(rec.get('source', '')).name)}</span></h1>
-<section><p><b>{status}</b></p><p>الخطة: <span dir="ltr">{html.escape(rec.get('plan') or '')}</span></p>{pre_html}
-<p>النموذج المختار: <b dir="ltr">{html.escape(str(rec.get('chosen')))}</b></p>
-{f'<p>الناتج: <span dir="ltr">{html.escape(rec["delivered"])}</span></p>' if rec.get('delivered') else ''}
+<body><main><h1>Video restoration report: {html.escape(Path(rec.get('source', '')).name)}</h1>
+<section><p><b>{status}</b></p><p>Plan: {html.escape(rec.get('plan') or '')}</p>{pre_html}
+<p>Chosen model: <b>{html.escape(str(rec.get('chosen')))}</b></p>
+{f'<p>Output: {html.escape(rec["delivered"])}</p>' if rec.get('delivered') else ''}
 <ul>{atts}</ul>{f'<ul>{notes}</ul>' if notes else ''}</section>
-{f'<section><h2>بوابات الحارس النهائية</h2><table>{rows}</table></section>' if rows else ''}
-{f'<section><h2>إطارات للمقارنة (قبل / بعد)</h2>{imgs}</section>' if imgs else ''}</main></body></html>"""
+{f'<section><h2>Final guard checks</h2><table><tr><th></th><th>Check</th><th>Measured</th><th>Limit</th></tr>{rows}</table></section>' if rows else ''}
+{f'<section><h2>Frames to compare (before / after)</h2>{imgs}</section>' if imgs else ''}</main></body></html>"""
     out.write_text(page, encoding="utf-8")
     return out

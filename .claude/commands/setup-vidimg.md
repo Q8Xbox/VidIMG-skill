@@ -2,7 +2,7 @@
 description: Install or repair everything VidIMG needs on this machine (free tools only) and connect it to Claude Code
 argument-hint: [output folder, e.g. D:/VidIMG]
 ---
-First run `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" setup --check` and show the person, in Arabic, which parts are missing.
+First run `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" setup --check` and show the person, in English, which parts are missing.
 
 Then explain what the install will do before running it: about 5 GB of downloads (PyTorch CUDA, the open
 models, Video2X 6.4.0, the OpenCV face models, portable VapourSynth), all free and official releases checked

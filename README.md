@@ -15,7 +15,7 @@ that fails it is never delivered.
 
 Restart Claude Code, then run `/vidimg:setup-vidimg D:/VidIMG`: it installs and verifies everything (about 5 GB of
 free, SHA-256-pinned downloads into `%LOCALAPPDATA%\VidIMG`). From a clone: `python vidimg_run.py setup --output D:/VidIMG`.
-Requirements: Windows 10/11 64-bit, Python 3.12+ on PATH, an NVIDIA GPU. Arabic install and usage guide: [GUIDE.ar.md](GUIDE.ar.md).
+Requirements: Windows 10/11 64-bit, Python 3.12+ on PATH, an NVIDIA GPU. Install and usage guide: [GUIDE.md](GUIDE.md).
 
 Design and evidence: [PLAN.md](PLAN.md) · every requirement and the install steps:
 [REQUIREMENTS.md](REQUIREMENTS.md).
@@ -43,7 +43,7 @@ Open this folder in Claude Code and approve the project MCP server `vidimg` when
 
 | Command | What it does |
 |---|---|
-| `/restore-photo <files or folders>` | Analyse, restore with guarded candidates, Arabic review page |
+| `/restore-photo <files or folders>` | Analyse, restore with guarded candidates, review page |
 | `/restore-video <video> [preview]` | Classical field handling if needed, guarded previews, full run, report |
 | `/setup-vidimg [output folder]` | Install / repair everything on this machine and connect Claude Code |
 | `/analyze-media <file>` | Profile and plan only; writes nothing |

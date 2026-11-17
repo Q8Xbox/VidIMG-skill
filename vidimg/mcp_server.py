@@ -39,7 +39,7 @@ mcp = FastMCP("vidimg", instructions=(
     "anime, and a classical AviSynth+/VapourSynth pre-pass, every result checked by a calibrated "
     "fidelity guard (face identity, structure, colour, temporal). Typical flow: analyze_media -> "
     "restore_photos / restore_video (background job) -> job_status until done -> show the report. "
-    "Never claim a result is faithful unless the guard passed it. Report to the person in Arabic."))
+    "Never claim a result is faithful unless the guard passed it. Report to the person in English."))
 
 
 @contextlib.contextmanager
@@ -118,7 +118,7 @@ def restore_photos(paths: list[str], out_dir: str | None = None, deblur: bool = 
     """Start a background job restoring photos (files and/or folders). For each photo: analyse, denoise
     with SCUNet if noisy, try the planned open models (BSRNet, RealESRNet, SwinIR; Video2X anime models
     for cartoons), keep the first that passes the fidelity guard, otherwise keep the original. Produces
-    16-bit outputs, before/after sheets with face zooms and an Arabic review page.
+    16-bit outputs, before/after sheets with face zooms and an English review page.
     deblur=True (opt-in, only when the person asks): photos the analysis flags as soft/blurred are first
     deblurred with NAFNet-GoPro and judged by the guard's deblur mode; sharp photos are never deblurred.
     Returns the job; poll job_status(job_id)."""
@@ -137,7 +137,7 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     (QTGMC for interlace, TFM+TDecimate for telecine); open-model candidates on three guarded preview
     segments (the faithful non-GAN models when their estimated run fits, otherwise Real-ESRGAN general;
     Video2X for anime); full run (chunked and resumable when long) with the first candidate that passes
-    every preview; final guard; HEVC 10-bit with audio and metadata kept, Arabic report.
+    every preview; final guard; HEVC 10-bit with audio and metadata kept, English report.
     preview_only=True stops after choosing the model.
     scale: exact output scale (2 = twice the height); default automatic (SD x2, 720p-class to 1080p).
     content: 'anime' for cartoons/anime (Video2X anime models), 'real' for camera footage, 'auto' to trust the

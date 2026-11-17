@@ -1,340 +1,340 @@
-# خطة «VidIMG Restore» (الإصدار 4): أداة لـ Claude Code تستعيد الصور والفيديو بأمانة للأصل، بأدوات مجانية فقط
+# "VidIMG Restore" plan (version 4): a Claude Code tool that restores photos and video faithfully to the original, with free tools only
 
-> **التاريخ:** 2026-11-16 · **الجهاز:** Windows 11 Pro · i9-12900K · 64GB RAM · NVIDIA RTX 5060 Ti 16GB
-> **المبدأ:** أدوات مجانية فقط (نماذج مفتوحة، Video2X، AviSynth+/VapourSynth، FFmpeg)، وكل قرار مبني على **قياس مقابل الأصل الحقيقي** لصورك ومقاطعك.
-> **المتطلبات الكاملة وخطوات التثبيت:** [`REQUIREMENTS.md`](REQUIREMENTS.md) · **دليل الاستخدام:** [`README.md`](README.md)
+> **Date:** 2026-11-16 · **Machine:** Windows 11 Pro · i9-12900K · 64GB RAM · NVIDIA RTX 5060 Ti 16GB
+> **Principle:** free tools only (open models, Video2X, AviSynth+/VapourSynth, FFmpeg), and every decision rests on **measurement against the true original** of your photos and clips.
+> **Full requirements and installation steps:** [`REQUIREMENTS.md`](REQUIREMENTS.md) · **Usage guide:** [`README.md`](README.md)
 
-### ما الجديد في الإصدار 4
-- 🧹 **أُزيلت كل خطة أو ميزة تعتمد على برامج مدفوعة** بطلبك (2026-11-16): لا Topaz (Gigapixel وPhoto AI وVideo AI وSharpen AI)، ولا محوّل المحركات، ولا خطوة الحدة، ولا المرحلة 7. والأداة **ترفض تشغيل أي برنامج من مجلد برنامج مدفوع**.
-- 📦 الشيفرة المحذوفة محفوظة للتاريخ فقط في [`archive/topaz/`](archive/topaz/) (لا يستوردها أي جزء من الأداة)، ومعها الإصدار السابق من هذه الخطة.
-- ✅ الأداة كاملة بالمجان: اختبارات الوحدة ناجحة، و`doctor` سليم، واستعادة الصور والفيديو تعمل من البداية للنهاية.
+### What's new in version 4
+- 🧹 **Every plan or feature that depended on paid software has been removed** at your request (2026-11-16): no Topaz (Gigapixel, Photo AI, Video AI and Sharpen AI), no engine adapter, no sharpening step, and no stage 7. The tool **refuses to run any program from a paid program's folder**.
+- 📦 The removed code is kept for the record only in [`archive/topaz/`](archive/topaz/) (no part of the tool imports it), together with the previous version of this plan.
+- ✅ The tool is complete for free: unit tests pass, `doctor` is clean, and photo and video restoration work end to end.
 
 ---
 
-## 0. الخلاصة
+## 0. Summary
 
-| الجانب | القرار | الدليل (مقابل الأصل الحقيقي) |
+| Aspect | Decision | Evidence (against the true original) |
 |---|---|---|
-| تكبير الصور | BSRNet ← RealESRNet ← SwinIR (نماذج لا تخترع النسيج: non-GAN) | BSRNet: هوية حقيقية **0.811** و+1.58 dB عن التكبير البسيط؛ RealESRNet 0.798؛ SwinIR 0.782 |
-| ضجيج الصور | SCUNet قبل التكبير | نموذج مدرَّب على صور حقيقية بلا نسيج مخترع |
-| الفيديو | RealESRNet/BSRNet إن كان التشغيل المقدَّر ≤ 3 ساعات، وإلا Real-ESRGAN general-v3 | RealESRNet: VMAF 90.1 وهوية 0.889؛ general-v3: 93.5 و0.868 لكنه أسرع (7.8 إطار/ث عند 720p) |
-| التداخل والتلسيني | QTGMC، وTFM+TDecimate، بمعالجة تقليدية أولاً | QTGMC 42.3 dB مقابل bwdif 40.4؛ TFM+TDecimate مطابق بتاً ببت على التلسيني النظيف |
-| الأنمي | Video2X (Real-CUGAN وReal-ESRGAN anime) | لا يُستخدم أبداً على وجوه حقيقية |
-| الحارس | هوية الوجه، والبنية، والملامح، ولون العينين، واللون، والتفاصيل المخترعة، والوميض، وVMAF | قبول 61/65 من الأمين ورفض 27/35 من الضار على 100 ناتج مصنّف |
-| القبول | **حكمك: «كل الوجوه سليمة»** على 19 صورة وفيديو الواتساب (بأدوات مجانية فقط) | `workspace/acceptance/human_verdict.json` |
+| Photo upscaling | BSRNet → RealESRNet → SwinIR (models that do not invent texture: non-GAN) | BSRNet: true identity **0.811** and +1.58 dB over simple upscaling; RealESRNet 0.798; SwinIR 0.782 |
+| Photo noise | SCUNet before upscaling | A model trained on real photos, with no invented texture |
+| Video | RealESRNet/BSRNet if the estimated run is ≤ 3 hours, otherwise Real-ESRGAN general-v3 | RealESRNet: VMAF 90.1 and identity 0.889; general-v3: 93.5 and 0.868 but faster (7.8 fps at 720p) |
+| Interlacing and telecine | QTGMC, and TFM+TDecimate, with classical processing first | QTGMC 42.3 dB vs bwdif 40.4; TFM+TDecimate bit-exact on clean telecine |
+| Anime | Video2X (Real-CUGAN and Real-ESRGAN anime) | Never used on real faces |
+| Guard | Face identity, structure, facial features, eye color, color, invented detail, flicker, and VMAF | Accepts 61/65 faithful and rejects 27/35 harmful across 100 labeled outputs |
+| Acceptance | **Your verdict: "all faces intact"** on 19 photos and the WhatsApp video (free tools only) | `workspace/acceptance/human_verdict.json` |
 
 ---
 
-## 1. السياسة (لا تتغير إلا بقرارك)
+## 1. Policy (changes only by your decision)
 
-1. **أدوات مجانية فقط.** لا برنامج مدفوع ولا ترخيص ولا اشتراك.
-2. **الأمانة قبل الجمال:** لا نماذج توليدية (مُرمّمات الوجوه مثل GFPGAN/CodeFormer، أو التكبير بالانتشار)، ولا نماذج GAN للصور.
-3. **الأصل لا يُمس:** لا كتابة بجوار الأصول أو فوقها، والمخرجات في `workspace/`.
-4. **الحارس إلزامي:** ما يرفضه لا يُسلَّم ويبقى الأصل، والتنبيه يُسلَّم مع ملاحظة.
-5. **لا تغيير في الألوان أو الإضاءة**، و**الاستيفاء عند الطلب فقط** (RIFE عبر Video2X).
-6. **الإخراج:** صور PNG بعمق 16-bit، وفيديو HEVC 10-bit مع نسخ الصوت والبيانات الوصفية.
-7. **كل شيء محلي:** لا تُرسل صورك أو مقاطعك إلى أي خدمة خارجية.
-8. **لغة التقارير:** العربية.
+1. **Free tools only.** No paid software, no license, no subscription.
+2. **Fidelity before beauty:** no generative models (face restorers such as GFPGAN/CodeFormer, or diffusion upscaling), and no GAN models for photos.
+3. **The original is never touched:** nothing is written next to or over the originals; outputs go in `workspace/`.
+4. **The guard is mandatory:** what it rejects is not delivered and the original stays; a warning is delivered with a note.
+5. **No change to colors or lighting**, and **interpolation only on request** (RIFE via Video2X).
+6. **Output:** 16-bit PNG photos, and HEVC 10-bit video with audio and metadata copied.
+7. **Everything is local:** your photos and clips are never sent to any external service.
+8. **Report language:** English.
 
 ---
 
-## 2. البيئة
+## 2. Environment
 
-التفاصيل الكاملة في [`REQUIREMENTS.md`](REQUIREMENTS.md). باختصار:
-- **Windows 10/11، وبطاقة NVIDIA بذاكرة 6GB على الأقل** (تعمل الأداة على المعالج بدونها لكن ببطء شديد).
-- **البرامج:**
+Full details in [`REQUIREMENTS.md`](REQUIREMENTS.md). In short:
+- **Windows 10/11, and an NVIDIA card with at least 6GB of memory** (the tool runs on the CPU without one, but very slowly).
+- **Software:**
   - Python 3.14
-  - FFmpeg 8 (نسخة كاملة)
-  - بيئة النماذج المفتوحة `tools/sr-venv` (PyTorch CUDA مع spandrel)، ومعها 7 نماذج مقفلة ببصمة SHA-256
-  - VapourSynth المحمول أو AviSynth+
+  - FFmpeg 8 (full build)
+  - The open-model environment `tools/sr-venv` (PyTorch CUDA with spandrel), with 7 models pinned by SHA-256 hash
+  - Portable VapourSynth or AviSynth+
   - Video2X
-  - نماذج الوجوه YuNet/SFace
-- **التثبيت من الصفر** بخمسة أوامر، و`python -m vidimg doctor` يتحقق من كل شيء.
+  - YuNet/SFace face models
+- **Installation from scratch** in five commands, and `python -m vidimg doctor` checks everything.
 
 ---
 
-## 3. الأدلة والقياسات (كلها مقابل الأصل الحقيقي)
+## 3. Evidence and measurements (all against the true original)
 
-### 3.1 الصور (12 صورة من صورك، تدهور مضبوط: تصغير مع JPEG)
-| النموذج | تطابق الهوية مع الأصل | الكسب عن التكبير البسيط |
+### 3.1 Photos (12 of your photos, controlled degradation: downscaling plus JPEG)
+| Model | Identity match with the original | Gain over simple upscaling |
 |---|---|---|
-| **BSRNet** (الافتراضي) | **0.811** | **+1.58 dB** |
+| **BSRNet** (default) | **0.811** | **+1.58 dB** |
 | RealESRNet | 0.798 | +0.62 dB |
-| تكبير تقليدي (Lanczos) | 0.785 | 0.00 |
+| Classical upscaling (Lanczos) | 0.785 | 0.00 |
 | SwinIR | 0.782 | +0.24 dB |
-| Real-ESRGAN (GAN) | 0.742–0.759 | −1.0 إلى −2.7 dB |
+| Real-ESRGAN (GAN) | 0.742–0.759 | −1.0 to −2.7 dB |
 
-وعلى 13 صورة صغيرة الوجوه سُلّمت 12. وفي القبول النهائي سُلّمت 19 من 20 صورة قابلة للتكبير، في 4 دقائق.
+On 13 photos with small faces, 12 were delivered. In the final acceptance, 19 of 20 upscalable photos were delivered, in 4 minutes.
 
-### 3.2 الفيديو (12 مقطعاً من فيديوهاتك 720p، مقطع منخفض الجودة مقابل الأصل)
-| النموذج | VMAF | الهوية | PSNR | السرعة (720p ← 1080p) |
+### 3.2 Video (12 clips from your 720p videos, low-quality clip vs the original)
+| Model | VMAF | Identity | PSNR | Speed (720p → 1080p) |
 |---|---|---|---|---|
-| RealESRNet | 90.1 | 0.889 | 36.89 | 0.47 إطار/ث |
-| BSRNet | 87.8 | 0.889 | 38.69 | قريبة |
-| general-v3 | 93.5 | 0.868 | 33.60 | **7.8 إطار/ث** |
+| RealESRNet | 90.1 | 0.889 | 36.89 | 0.47 fps |
+| BSRNet | 87.8 | 0.889 | 38.69 | similar |
+| general-v3 | 93.5 | 0.868 | 33.60 | **7.8 fps** |
 
-> أُعيد هذا القياس بعد إصلاح F14 (إطار مكرر كان يزيح النواتج في 6 من 12 مقطعاً، فظهرت الأرقام السابقة أقل من حقيقتها: 84.5/82.0/89.4). القديم محفوظ في `workspace/bench_free/video/summary_before_fpsfix.json`.
+> This measurement was rerun after fixing F14 (a duplicated frame that shifted the outputs in 6 of 12 clips, so the earlier figures came out lower than they really were: 84.5/82.0/89.4). The old one is kept in `workspace/bench_free/video/summary_before_fpsfix.json`.
 
-القاعدة: النماذج الأمينة تُستخدم إن قُدّر تشغيلها بثلاث ساعات أو أقل (الإطارات × البكسلات، والمتداخل يُحسب مضاعفاً)، وإلا يُستخدم general-v3 والحارس يحمي الوجوه.
+The rule: the faithful models are used if their run is estimated at three hours or less (frames × pixels, with interlaced material counted double); otherwise general-v3 is used and the guard protects the faces.
 
-### 3.3 التداخل والتلسيني ([`research/avisynth/05_integration_design.md`](research/avisynth/05_integration_design.md))
-| الاختبار | الأفضل | المقارنة |
+### 3.3 Interlacing and telecine ([`research/avisynth/05_integration_design.md`](research/avisynth/05_integration_design.md))
+| Test | Best | Comparison |
 |---|---|---|
-| فك التداخل (PSNR) | **QTGMC SourceMatch=3: 42.29 dB** (أسوأ إطار 39.79) | bwdif: 40.42 (35.06) |
-| التلسيني النظيف | **TFM+TDecimate: مطابق بتاً ببت** | fieldmatch+bwdif: 89.3 dB (أسوأ إطار 25.7) |
-| التلسيني المضغوط | **46.2 dB** | 43.3 dB، أما فك التداخل الخاطئ فيعطي 21 dB |
-| التنظيف قبل النموذج (Deblock/SMDegrain) | **لا كسب** (VMAF −0.3 إلى −0.4 على 12/12) | فبقي مطفأً |
+| Deinterlacing (PSNR) | **QTGMC SourceMatch=3: 42.29 dB** (worst frame 39.79) | bwdif: 40.42 (35.06) |
+| Clean telecine | **TFM+TDecimate: bit-exact** | fieldmatch+bwdif: 89.3 dB (worst frame 25.7) |
+| Compressed telecine | **46.2 dB** | 43.3 dB, while wrong deinterlacing gives 21 dB |
+| Cleanup before the model (Deblock/SMDegrain) | **No gain** (VMAF −0.3 to −0.4 on 12/12) | so it stays off |
 
-ومحرك AviSynth+ أساسي، وVapourSynth محرك ثانٍ مُثبت التطابق (±0.1 dB)، وffmpeg بديل أخير.
+AviSynth+ is the primary engine, VapourSynth a second engine with proven parity (±0.1 dB), and ffmpeg a last fallback.
 
-### 3.4 الحارس
-- **المعايرة:** على صورك ومقاطعك بتسميات من الأصل الحقيقي (الهوية على طبقتين 0.79/0.84، وبنية الوجه 0.945، واللون ΔE ≤ 4، والوميض ≤ 0.02).
-- **بوابة البنية العامة للصور** صارت تنبيهاً فوق 0.93: على 100 ناتج مصنّف لم تلتقط وحدها ناتجاً ضاراً واحداً، والقرارات متطابقة قبل التغيير وبعده.
-- **درس مهم:** «الإسقاط الخلفي» يرفع درجات الحارس لكنه **يبعد الناتج عن الأصل الحقيقي** (0.811 ← 0.774) لأنه ينسخ عيوب المدخل، فرُفض. فقرارات النماذج تُبنى على الأصل الحقيقي لا على الحارس وحده.
-- **فيديو الواتساب بالنماذج المجانية (2026-11-16):** **سُلّم بـ RealESRNet** بعد إصلاح F14 وتفعيل «البنية وحدها» (`workspace/acceptance/video_whatsapp_free3`): 3743 إطاراً مطابقاً، والهوية 0.811، وبنية الوجه 0.992، والبنية العامة 0.996، وΔE 1.8، والوميض 0.0002، وVMAF 84.0. وقبل ذلك لم يُسلَّم في محاولتين:
-  - السبب الأول كان **خللاً** في محرك الفيديو المجاني لا في الوجوه: إطار مكرر في البداية أزاح كل الإطارات (F14)، فرأى الحارس وجوهاً «متغيرة» في لقطة الكاميرا المتحركة. أُصلح.
-  - بعد الإصلاح نجح كل نموذج في معاينتين من ثلاث: BSRNet وgeneral-v3 يسقطان في مشهد فيه صورتان صغيرتان (18–20 بكسل) معلّقتان على الجدار نعّمهما النموذج قليلاً، وRealESRNet يسقط في معاينة أخرى ببوابة البنية العامة (0.854). وأكّد تشغيل كامل جديد بالمحرك المُصلَح (`workspace/acceptance/video_whatsapp_free2`) النتيجة نفسها.
-  - سقوط RealESRNet سببه إطار عنوان شبه أسود فيه نص باهت: نظّف النموذج ضجيج الضغط من السواد، وعلى إطار شبه مسطح يهبط مقياس البنية بشدة (0.79) رغم تطابق الصورتين بصرياً وغياب الوجوه. هذا ضعف في بوابة البنية العامة على الإطارات المظلمة؛ معالجته تحتاج قياساً على النواتج المصنّفة أولاً.
-- **قياس «بوابة البنية على البنية وحدها» (2026-11-16):** الخيار `guard.BACKPROJ_STRUCTURE_ONLY` (**مُفعَّل بقرارك** بعد القياس) يحذف حدّ السطوع من SSIM ويترك السطوع لبوابة اللون (ΔE). حدّ السطوع في SSIM نسبي، فقرب الأسود تُقرأ عتمة بثلاث درجات كأنها انهيار بنية (0.79 مقابل 0.997 للبنية وحدها).
-  - 385 ناتج صور مصنّفاً و72 ناتج فيديو: **لا يتغير أي قرار** (تغيّر القيمة: الوسيط 0.0003).
-  - اختبار ضغط على المجموعة الصالحة (161 ناتجاً): مشهد مظلم كله وتغيير إضاءة بنسبة 20%: القرارات متطابقة. سحق السواد (ما تحت 24 يصير أسود): **ناتج واحد من 161 يفلت** كان يُرفض بالبنية وحدها.
-  - محاولة سدّ ذلك ببوابة «إزاحة مستوى الأسود» فشلت: النواتج الأمينة تُزيح الظلال حتى ±8–12 درجة، والسحق يبدأ من −5، فلا حدّ فاصل.
-  - مع الخيار: RealESRNet ينجح في معاينات الواتساب الثلاث.
-  - ملاحظة عامة: حين تكون الصورة كلها مظلمة يضعف الحارس كله (رفض 7 من 35 ضاراً فقط، بالخيار أو بدونه).
-- **قياس «التسامح مع الوجوه الصغيرة في بوابتي الملامح وبنية الوجه» (أقل من 24 بكسل في المصدر):** الخيار موجود في الشيفرة (`guard.STRUCTURE_MIN_SOURCE_FACE`) لكنه **مطفأ**.
-  - مجموعة المعايرة الصالحة (وجوه ≥ 40 بكسل، 77 ناتجاً) و72 ناتج فيديو: **لا يتغير أي قرار**.
-  - صور الوجوه الصغيرة (المعايرة الأولى، 175 ناتجاً): تغيّر 61 قراراً، منها **24 ناتجاً ضاراً كان يُرفض فصار يُقبل** (بينها مُرمّمات وجوه توليدية)، مقابل 20 ناتجاً أميناً إضافياً. أي أن هذه البوابة هي الحماية الوحيدة للوجوه الصغيرة جداً، فلا يُنصح بتشغيله.
-- **إعادة معايرة بوابات الفيديو على النماذج المجانية (2026-11-16)** (`workspace/calibration_video/20261116-153325`، 12 مقطعاً من فيديوهاتك و60 ناتجاً):
-  - بوابة VMAF النسبية **بقيت على 4.0**: النواتج الضارة لا تبتعد عن المرشح المرجعي إلا 0.02–2.3، فـ VMAF لا يفصلها. والحدّ «الأفضل» حسابياً (0) يتبع تصنيفاً يعاقب النعومة (BSRNet وRealESRNet بهوية 0.90–0.93) وكان سيرفض نواتج أمينة.
-  - بتصنيف الهوية (سياسة الأداة): الحارس كله يقبل **31 من 33** أميناً ويرفض **9 من 10** ضارة (الغليان الزمني 9 من 9 عبر بوابتي الوميض والوجه). الناتج الوحيد الذي أفلت general-v3 على مقطع واحد من MBZ هويته منخفضة لكل المرشحين (0.40–0.55).
+### 3.4 The guard
+- **Calibration:** on your photos and clips, with labels from the true original (identity in two tiers 0.79/0.84, face structure 0.945, color ΔE ≤ 4, flicker ≤ 0.02).
+- **The global structure gate for photos** is now a warning above 0.93: across 100 labeled outputs it did not catch a single harmful output on its own, and the decisions are identical before and after the change.
+- **Important lesson:** "back-projection" raises the guard's scores but **moves the output away from the true original** (0.811 → 0.774) because it copies the input's defects, so it was rejected. Model decisions are therefore based on the true original, not on the guard alone.
+- **WhatsApp video with the free models (2026-11-16):** **delivered with RealESRNet** after fixing F14 and enabling "structure only" (`workspace/acceptance/video_whatsapp_free3`): 3743 matching frames, identity 0.811, face structure 0.992, global structure 0.996, ΔE 1.8, flicker 0.0002, and VMAF 84.0. Before that it was not delivered in two attempts:
+  - The first cause was a **bug** in the free video engine, not in the faces: a duplicated frame at the start shifted every frame (F14), so the guard saw "changed" faces in the moving-camera shot. Fixed.
+  - After the fix, each model passed two of three previews: BSRNet and general-v3 fail on a scene with two small pictures (18–20 pixels) hanging on the wall that the model smoothed slightly, and RealESRNet fails another preview on the global structure gate (0.854). A new full run with the fixed engine (`workspace/acceptance/video_whatsapp_free2`) confirmed the same result.
+  - RealESRNet's failure was caused by a near-black title frame with faint text: the model cleaned compression noise out of the black, and on a nearly flat frame the structure metric drops sharply (0.79) even though the two images match visually and there are no faces. This is a weakness of the global structure gate on dark frames; addressing it first requires measuring on the labeled outputs.
+- **Measurement of "structure gate on structure only" (2026-11-16):** the option `guard.BACKPROJ_STRUCTURE_ONLY` (**enabled by your decision** after the measurement) drops the luminance term from SSIM and leaves luminance to the color gate (ΔE). The luminance term in SSIM is relative, so near black a darkening of three levels reads as a structural collapse (0.79 vs 0.997 for structure only).
+  - 385 labeled photo outputs and 72 video outputs: **no decision changes** (change in the value: median 0.0003).
+  - Stress test on the valid set (161 outputs): an entirely dark scene and a 20% lighting change: decisions identical. Crushing the blacks (everything below 24 becomes black): **one output in 161 slips through** that used to be rejected by structure alone.
+  - An attempt to close that gap with a "black-level shift" gate failed: faithful outputs shift the shadows by up to ±8–12 levels, and crushing starts at −5, so there is no separating threshold.
+  - With the option: RealESRNet passes all three WhatsApp previews.
+  - General note: when the whole image is dark, the entire guard weakens (it rejected only 7 of 35 harmful outputs, with or without the option).
+- **Measurement of "tolerance for small faces in the facial-feature and face-structure gates" (under 24 pixels in the source):** the option exists in the code (`guard.STRUCTURE_MIN_SOURCE_FACE`) but is **off**.
+  - The valid calibration set (faces ≥ 40 pixels, 77 outputs) and 72 video outputs: **no decision changes**.
+  - Small-face photos (the first calibration, 175 outputs): 61 decisions changed, including **24 harmful outputs that had been rejected and became accepted** (among them generative face restorers), versus 20 additional faithful outputs. In other words, this gate is the only protection for very small faces, so enabling the option is not recommended.
+- **Recalibration of the video gates on the free models (2026-11-16)** (`workspace/calibration_video/20261116-153325`, 12 clips from your videos and 60 outputs):
+  - The relative VMAF gate **stayed at 4.0**: harmful outputs deviate from the reference candidate by only 0.02–2.3, so VMAF does not separate them. The arithmetically "best" threshold (0) follows a labeling that penalizes softness (BSRNet and RealESRNet with identity 0.90–0.93) and would have rejected faithful outputs.
+  - With identity labeling (the tool's policy): the whole guard accepts **31 of 33** faithful and rejects **9 of 10** harmful (temporal boiling 9 of 9 via the flicker and face gates). The only output that slipped through was general-v3 on a single clip from MBZ, whose identity is low for all candidates (0.40–0.55).
 
-### 3.5 الدفعات والفيديو الطويل
-- **تجميع الصور حسب الإعدادات** في استدعاء واحد (يُحمَّل النموذج مرة واحدة)، مع نقطة استئناف لكل صورة.
-- **الفيديو الطويل على أجزاء** بدقيقتين، مع ثانية سياق من كل جانب تُقص بدقة، وحدود على قطعات المشاهد، ودمج للصوت مرة واحدة، واستئناف من الجزء التالي.
-- **إثبات الاستئناف:** فيديو 56 دقيقة قُطع مرتين ثم استؤنف وسُلّم دون تدخل، بإطارات وصوت ومدة مطابقة للأصل (آلية الأجزاء مستقلة عن النموذج المستخدم).
+### 3.5 Batches and long videos
+- **Grouping photos by settings** into a single call (the model is loaded once), with a resume point for each photo.
+- **Long videos in chunks** of two minutes, with one second of context on each side that is trimmed precisely, boundaries on scene cuts, audio muxed once, and resumption from the next chunk.
+- **Proof of resumption:** a 56-minute video was interrupted twice, then resumed and delivered without intervention, with frames, audio and duration matching the original (the chunk mechanism is independent of the model used).
 
-### 3.6 إزالة الضبابية المجانية (قيست 2026-11-16، **خيار اختياري للصور**)
-نماذج مفتوحة (MIT) يدعمها spandrel: NAFNet-GoPro (حركة)، وNAFNet-REDS (ضبابية مع JPEG)، وFFTformer-RealBlur (ضبابية كاميرا حقيقية). على 25 صورة من صورك بتدهور مضبوط مقابل الأصل (`workspace/bench_deblur`):
+### 3.6 Free deblurring (measured 2026-11-16, **optional for photos**)
+Open models (MIT) supported by spandrel: NAFNet-GoPro (motion), NAFNet-REDS (blur with JPEG), and FFTformer-RealBlur (real camera blur). On 25 of your photos with controlled degradation, against the original (`workspace/bench_deblur`):
 
-| الحالة | الأفضل | الكسب | الهوية مع الأصل | الحارس الحالي |
+| Case | Best | Gain | Identity with the original | Current guard |
 |---|---|---|---|---|
-| ضبابية حركة | **NAFNet-GoPro** | **+4.6 dB** | 0.52 ← **0.64** | يقبل 3 من 25 فقط |
-| ضبابية عدسة (الأشيع) | لا نموذج مفيد؛ الحدّة التقليدية +1.4 وNAFNet +0.9 | صغير | 0.61 ← 0.66 | 22/25 |
-| صورة غير ضبابية | **كل النماذج تضر** | NAFNet −6.4 dB | 0.92 ← 0.86 | — |
+| Motion blur | **NAFNet-GoPro** | **+4.6 dB** | 0.52 → **0.64** | Accepts only 3 of 25 |
+| Lens blur (the most common) | No useful model; classical sharpening +1.4 and NAFNet +0.9 | Small | 0.61 → 0.66 | 22/25 |
+| Non-blurred photo | **Every model harms it** | NAFNet −6.4 dB | 0.92 → 0.86 | — |
 
-- كشف الضبابية الحالي يفصل جيداً على هذه البيانات (لا إنذار كاذب على 25 صورة حادة؛ 24/25 عدسة، 22/25 حركة)، لكنه يعدّ صور الهاتف 12 ميغابكسل «ناعمة» (5 من أصولك)، وعلى إحداها كان التحسن طفيفاً وغيّر NAFNet شكل العين قليلاً.
-- **لماذا لم تُعتمد:** (1) الحارس يقارن بالمدخل الضبابي فيرفض إزالة الضبابية الصحيحة (الهوية 16 وبنية الوجه 22 من 25)، ويلزمه وضع خاص يُعاير على هذه النواتج المصنّفة؛ (2) لا كاشف يفرّق الحركة عن العدسة؛ (3) لا نموذج مفيد لضبابية العدسة (KBNet للعدسة متاح فقط عبر مجلد OneDrive يحتاج تسجيل دخول).
-- الأوزان التجريبية ومصادرها وبصماتها في `tools/free-models-trial/SOURCES.json` (لا تستخدمها الأداة).
-- **ما بُني بعد ذلك (خيار `--deblur` / `deblur=True`، مطفأ افتراضياً):**
-  - **الكاشف:** جرّبت كاشفين للتفريق بين الحركة والعدسة (اتجاه التدرجات، وانخفاض الارتباط الذاتي عند طول الضبابية)، **ولم يفصل أيٌّ منهما** على صورك. ولم يلزم ذلك: NAFNet-GoPro على ضبابية العدسة لم يضر (+0.9 dB والهوية 0.61 ← 0.66). فالخطوة تعمل على كل صورة يعلّمها التحليل «ناعمة» (`soft_or_blurred`، لم يُخطئ في 25 صورة حادة)، ولا تعمل أبداً على الحادة.
-  - **وضع الحارس لإزالة الضبابية:** يبحث عن الضبابية (غاوس أو خط حركة بزاوية وطول) التي تعيد الناتج إلى المدخل، ثم يطبّق البوابات نفسها على الناتج المُعاد تضبيبه، كما يُحكم على التكبير بتصغيره. على الحالات الواقعية: الحركة **17 من 23** صحيحة مقبولة (الحارس العادي 2)، والعدسة **21 من 21**. الستّ المرفوضة صور جماعية بوجوه صغيرة (خطأ محافظ: تكمل دون إزالة الضبابية). ولا يميّز هذا الوضع «زيادة حدة صورة حادة»، ولذلك يبقى شرط «ناعمة» هو الحماية الأساسية.
-  - **التشغيل الكامل:** 6 صور (3 حركة، 2 عدسة، 1 حادة): الحادة لم تُمسّ، و3 أُزيلت ضبابيتها، و2 رفض الحارس إزالة ضبابيتهما فأكملتا بالتكبير وحده، وسُلّمت الست. مثال: صورة حركة 31.1 ← **35.4 dB** مقابل الأصل.
-  - النموذج مثبّت في `tools/free-models/manifest.json` كنموذج اختياري (`nafnet_gopro`، MIT، بصمة SHA-256 في `lock.json`).
+- The current blur detection separates well on this data (no false alarm on 25 sharp photos; 24/25 lens, 22/25 motion), but it counts 12-megapixel phone photos as "soft" (5 of your originals), and on one of them the improvement was slight and NAFNet slightly changed the shape of the eye.
+- **Why it was not adopted:** (1) the guard compares against the blurry input, so it rejects correct deblurring (identity 16 and face structure 22 of 25), and it needs a special mode calibrated on these labeled outputs; (2) there is no detector that tells motion blur from lens blur; (3) there is no useful model for lens blur (KBNet for lens blur is available only through a OneDrive folder that requires signing in).
+- The trial weights, their sources and their hashes are in `tools/free-models-trial/SOURCES.json` (not used by the tool).
+- **What was built afterwards (option `--deblur` / `deblur=True`, off by default):**
+  - **The detector:** I tried two detectors to tell motion from lens blur (gradient direction, and the drop in autocorrelation at the blur length), **and neither separated them** on your photos. It turned out not to be needed: NAFNet-GoPro did no harm on lens blur (+0.9 dB and identity 0.61 → 0.66). So the step runs on every photo the analysis flags as "soft" (`soft_or_blurred`, which made no mistake on 25 sharp photos), and never on sharp ones.
+  - **Guard mode for deblurring:** it searches for the blur (Gaussian, or a motion line with an angle and length) that maps the output back to the input, then applies the same gates to the re-blurred output, just as upscaling is judged by downscaling it. On the realistic cases: motion **17 of 23** correct outputs accepted (the normal guard: 2), and lens **21 of 21**. The six rejected are group photos with small faces (a conservative error: they continue without deblurring). This mode does not distinguish "extra sharpening of a sharp photo", so the "soft" condition remains the main protection.
+  - **Full run:** 6 photos (3 motion, 2 lens, 1 sharp): the sharp one was not touched, 3 were deblurred, 2 had their deblurring rejected by the guard and so continued with upscaling alone, and all six were delivered. Example: a motion photo 31.1 → **35.4 dB** against the original.
+  - The model is installed in `tools/free-models/manifest.json` as an optional model (`nafnet_gopro`, MIT, SHA-256 hash in `lock.json`).
 
-### 3.7 دراسة عينات الرسوم المتحركة (`Desktop/Samples`، 2026-11-16)
-طلبتَ تكبير Sample01–05 إلى 2x بالضبط، ودراسة b001 (الأصل) مقابل a001 (ناتج Video2X عندك). المخرجات في `D:/VidIMG/samples_2x`.
+### 3.7 Cartoon samples study (`Desktop/Samples`, 2026-11-16)
+You asked for Sample01–05 to be upscaled to exactly 2x, and for a study of b001 (the original) vs a001 (your Video2X output). The outputs are in `D:/VidIMG/samples_2x`.
 
-**ما اكتُشف:**
-- **كل العينات رسوم متحركة،** لكن التحليل الآلي لم يتعرف عليها (درجة الأنمي 0.43–0.56)، ورأى كاشف الوجوه «وجوهاً» في الرسوم. المقاييس اليدوية (التسطح، والألوان، وحدّة الحواف) **لا تفصل** الرسوم القديمة المضغوطة عن فيديوهاتك الحقيقية (فيديو MBZ الحقيقي سجّل 0.62).
-  ← أُضيف الخيار `--content anime|real|auto`، وصار التحليل يُخرج **لوحة إطارات** يراها Claude ليقرر نوع المحتوى، ويبقى الوضع الآلي محافظاً.
-- **a001 = Real-ESRGAN anime-v3 ×2** (تطابق 41.8 dB مقابل ≤ 34.8 لبقية النماذج). لكنه **أسقط إطاراً من كل خمسة إطارات حقيقية** (29.97 ← 23.976)؛ إطارات b001 فريدة وليست ممزوجة، فالحركة في a001 أقل سلاسة.
-- **حقيقة أرضية للرسوم** (12 مقطعاً، تصغير ×½ مع ضغط ثم استعادة ×2، `workspace/samples_study/anime_gt`):
+**What was found:**
+- **All the samples are cartoons,** but the automatic analysis did not recognize them (anime score 0.43–0.56), and the face detector saw "faces" in the drawings. The hand-crafted metrics (flatness, colors, edge sharpness) **do not separate** old compressed cartoons from your real videos (the real MBZ video scored 0.62).
+  → Added the option `--content anime|real|auto`; the analysis now outputs a **frame sheet** that Claude looks at to decide the content type, and the automatic mode stays conservative.
+- **a001 = Real-ESRGAN anime-v3 ×2** (a 41.8 dB match vs ≤ 34.8 for the other models). But it **dropped one of every five real frames** (29.97 → 23.976); b001's frames are unique, not blended, so the motion in a001 is less smooth.
+- **Ground truth for cartoons** (12 clips, ×½ downscale with compression, then ×2 restoration, `workspace/samples_study/anime_gt`):
 
-| النموذج | VMAF | PSNR | ملاحظة بصرية |
+| Model | VMAF | PSNR | Visual note |
 |---|---|---|---|
-| general-v3 | **82.4** | 32.1 | خطوط حادة ونسيج خلفية أكثر |
-| Real-CUGAN pro conservative | 80.4 | 32.0 | بقع في الخلفية |
-| RealESRNet | 79.5 | 33.7 | أنعم |
-| Real-ESRGAN anime-v3 | 79.3 | 32.7 | **خطوط نظيفة** (نموذج a001) |
-| Real-CUGAN se | 78.2 | **34.4** | خطوط نظيفة |
+| general-v3 | **82.4** | 32.1 | Sharp lines and more background texture |
+| Real-CUGAN pro conservative | 80.4 | 32.0 | Blotches in the background |
+| RealESRNet | 79.5 | 33.7 | Softer |
+| Real-ESRGAN anime-v3 | 79.3 | 32.7 | **Clean lines** (a001's model) |
+| Real-CUGAN se | 78.2 | **34.4** | Clean lines |
 
-  ← مسار الأنمي: anime-v3 ثم CUGAN se ثم general-v3. وبوابات الوجه **استشارية** على الوجوه المرسومة، لأن نموذج الهوية مدرّب على وجوه حقيقية.
+  → Anime path: anime-v3, then CUGAN se, then general-v3. The face gates are **advisory** on drawn faces, because the identity model is trained on real faces.
 
-**النتائج (تكبير 2x بالضبط، `--content anime`، المخرجات في `D:/VidIMG/samples_2x`):**
+**Results (exactly 2x upscaling, `--content anime`, outputs in `D:/VidIMG/samples_2x`):**
 
-| العينة | الأصل ← الناتج | الإطارات | النموذج | VMAF | ملاحظات |
+| Sample | Original → Output | Frames | Model | VMAF | Notes |
 |---|---|---|---|---|---|
-| Sample01 | 640×480 ← 1280×960 | 38720 مطابقة | anime-v3 | 94.4 | |
-| Sample02 | 1920×1080 ← 3840×2160 | 33322 مطابقة | anime-v3 | 96.4 | 4K؛ نحو ساعتين و15 دقيقة |
-| Sample03 | 640×480 ← 1280×960 (MKV) | 1946 مطابقة | anime-v3 | 98.0 | AVI وPCM؛ وسيط FFV1 للطوابع |
-| Sample04 | 512×384 ← 1024×768 | 12120 مطابقة | anime-v3 | 98.4 | إزاحة الصورة عن الصوت (0.2 ث) محفوظة |
-| Sample05 | 720×480 ← 1440×960 (MKV) | 34468 مطابقة | anime-v3 | 97.7 | الترجمة محفوظة |
-| b001 | 720×576 ← 1440×1152 | **43259** (a001: 34607) | anime-v3 | 96.6 | النموذج نفسه في a001، لكن بكل الإطارات |
-| Sample06 | 720×544 ← 1440×1088 (MKV) | 30571 مطابقة | anime-v3 | 97.1 | VHS، بكسل غير مربع 11696:11565 أُعيد (انظر 3.8)؛ 26 دقيقة |
-| Sample07 | 768×576 ← 1536×1152 | 33191 مطابقة | anime-v3 | 96.3 | الصورة تبدأ بعد الصوت 0.08 ث، محفوظة؛ 25 دقيقة |
+| Sample01 | 640×480 → 1280×960 | 38720 matching | anime-v3 | 94.4 | |
+| Sample02 | 1920×1080 → 3840×2160 | 33322 matching | anime-v3 | 96.4 | 4K; about two hours and 15 minutes |
+| Sample03 | 640×480 → 1280×960 (MKV) | 1946 matching | anime-v3 | 98.0 | AVI and PCM; FFV1 intermediate for the timestamps |
+| Sample04 | 512×384 → 1024×768 | 12120 matching | anime-v3 | 98.4 | Video-to-audio offset (0.2 s) preserved |
+| Sample05 | 720×480 → 1440×960 (MKV) | 34468 matching | anime-v3 | 97.7 | Subtitles preserved |
+| b001 | 720×576 → 1440×1152 | **43259** (a001: 34607) | anime-v3 | 96.6 | Same model as in a001, but with all the frames |
+| Sample06 | 720×544 → 1440×1088 (MKV) | 30571 matching | anime-v3 | 97.1 | VHS, non-square pixels 11696:11565 restored (see 3.8); 26 minutes |
+| Sample07 | 768×576 → 1536×1152 | 33191 matching | anime-v3 | 96.3 | Video starts 0.08 s after the audio, preserved; 25 minutes |
 
-ملاحظة على a001: فقد أيضاً نسبة البكسل 16:15 (SAR غير محدد)، فيُعرض 5:4 بدل 4:3، أي أن الصورة مضغوطة أفقياً 6.7%.
+Note on a001: it also lost the 16:15 pixel aspect ratio (SAR unset), so it displays as 5:4 instead of 4:3, i.e. the picture is squeezed horizontally by 6.7%.
 
-**أعطال أصلحتها هذه الدراسة:**
-1. **Video2X 6.4 يسقط آخر إطارين في كل تشغيل** ← يُعاد بناؤهما بنسخ آخر إطار ودمج بلا إعادة ترميز.
-2. **Video2X يغيّر توقيت الصورة عن الصوت** (0.08 و0.91 ثانية)، **والمحرك المجاني فقد إزاحة Sample04** (0.2 ثانية) ← دالة `media.fix_av_offset` بعد كل محرك ودمج ومعالجة أولى، وبوابة حارس جديدة `av_sync`.
-3. **Video2X كتب كل الطوابع الزمنية صفراً** مع MPEG-4 Part 2 (Sample03.avi) فخرج ملف لا يُشغَّل صحيحاً، وVMAF «25» مضلّل ← ترميز بلا B-frames، وإعادة ختم الطوابع، وبوابة `timestamps`، وVMAF محدود بعدد الإطارات لا بالوقت.
-4. **عدد الإطارات المقدَّر** من المدة كان خاطئاً لمقطع يبدأ من منتصف الملف (25120 بدل 120) ← عدّ دقيق للحزم (`probe(exact=True)`).
-5. **ترجمة ASS تكسر حاوية MP4** وكانت تضيع ← حاوية MKV تلقائياً عند وجود ترجمة أو مرفقات (خطوط) أو صوت PCM، مع نسخ الترجمة من الأصل.
-6. Anime4K (libplacebo) يحتاج أبعاد الإخراج؛ ويُرمّز Video2X الآن بـ hevc_nvenc على GPU؛ وأُضيف `--scale 2` لـ 2x بالضبط، ويُسمح بمسار الأنمي فوق 720p عند طلبه.
-7. **قياس الوميض عاقب إزالة الحبيبات:** لقطة سماء ليلية حبيبية في Sample05 «فشلت» بـ 0.031، مع أن تغيّر الناتج بين الإطارات أقل من المصدر. صار الناتج يُطبَّع بالتفاصيل الأكبر بينه وبين المصدر، فهبطت القيمة إلى −0.008. وعند إعادة الفحص على كل النواتج المصنّفة (132 فيديو حقيقياً و108 رسوم) لم يتغير أي قرار، وما زالت نواتج الغليان الـ 36 تُلتقط كلها.
-8. **قصّ المعاينات كان ينسخ الترجمة،** فصارت مدة المقطع 1118 ثانية بدل 4 (وأسقط general-v3 ظلماً). ← القصّ يأخذ الصورة والصوت فقط، والمدة تُحسب من عدد الإطارات إذا ضخّمها مسار آخر.
-9. **طابور المهام لم يكن بالترتيب:** سبقت Sample02 (4K) مهمة b001. ← صار الطابور بالأقدم أولاً.
-10. **طوابع Video2X والـ B-frames:** إعادة ختم طوابع مقطع فيه B-frames بترتيب الحزم **تبعثر ترتيب العرض**، وهذا ما أصاب ناتج Sample03 الأول (طوابع متمايزة لكن غير متصاعدة عند العرض، ولم يلحظ VMAF ذلك). وتعطيل B-frames غير ممكن: `--max-b-frames 0` مع NVENC في Video2X 6.4 يفشل (invalid param). ← المصادر ذات الطوابع غير الموثوقة (MPEG-4 Part 2، وMS-MPEG4، وH.263، وWMV، وAVI) تُحوَّل أولاً إلى وسيط FFV1 بلا فقد، فتخرج طوابع Video2X صحيحة. ولا إعادة ختم إلا بلا B-frames، و**بوابة `timestamps` تفحص الآن ترتيب العرض.**
-11. **الذيل في MP4:** لاحقة الإطارين رُمّزت بقاعدة زمن 1/30000 والملف 1/16000، فضرب الدمج طوابعها في 1.875 (ذيل b001 عند 2706 ثانية). ← قاعدة زمن الملف نفسها، وتصحيح المدة في قائمة الدمج، والمعدل من المصدر، وفحص موضع آخر إطار قبل القبول. والحارس كان قد التقطها (بوابة duration) فلم يُسلَّم الملف.
-12. **خطاف الحماية** كان يمنع مجرد سرد مجلد نماذج Video2X ← صار يمنع تشغيل Video2X فعلياً بمعالج أنمي دون `anime` فقط.
+**Faults fixed by this study:**
+1. **Video2X 6.4 drops the last two frames on every run** → they are rebuilt by duplicating the last frame and concatenating without re-encoding.
+2. **Video2X shifts the video timing relative to the audio** (0.08 and 0.91 seconds), **and the free engine lost Sample04's offset** (0.2 seconds) → the function `media.fix_av_offset` after every engine, mux and pre-pass, and a new guard gate `av_sync`.
+3. **Video2X wrote every timestamp as zero** with MPEG-4 Part 2 (Sample03.avi), producing a file that does not play correctly, and a misleading VMAF of "25" → encoding without B-frames, restamping the timestamps, a `timestamps` gate, and VMAF bounded by frame count rather than by time.
+4. **The estimated frame count** from the duration was wrong for a clip starting in the middle of the file (25120 instead of 120) → exact packet counting (`probe(exact=True)`).
+5. **ASS subtitles break the MP4 container** and were being lost → an MKV container automatically when there are subtitles, attachments (fonts) or PCM audio, with the subtitles copied from the original.
+6. Anime4K (libplacebo) needs the output dimensions; Video2X now encodes with hevc_nvenc on the GPU; `--scale 2` was added for exactly 2x; and the anime path is allowed above 720p when requested.
+7. **The flicker metric penalized grain removal:** a grainy night-sky shot in Sample05 "failed" at 0.031, even though the output changes less between frames than the source. The output is now normalized by the larger detail of the two (output or source), so the value dropped to −0.008. Re-checking all the labeled outputs (132 real videos and 108 cartoons) changed no decision, and all 36 boiling outputs are still caught.
+8. **Trimming the previews copied the subtitles,** so the clip duration became 1118 seconds instead of 4 (and general-v3 was failed unfairly). → Trimming takes only the video and audio, and the duration is computed from the frame count if another stream inflated it.
+9. **The job queue was not in order:** Sample02 (4K) jumped ahead of the b001 job. → The queue is now oldest first.
+10. **Video2X timestamps and B-frames:** restamping a clip that has B-frames in packet order **scrambles the presentation order**, which is what hit the first Sample03 output (distinct timestamps, but not ascending in presentation, and VMAF did not notice). Disabling B-frames is not possible: `--max-b-frames 0` with NVENC in Video2X 6.4 fails (invalid param). → Sources with unreliable timestamps (MPEG-4 Part 2, MS-MPEG4, H.263, WMV and AVI) are first converted to a lossless FFV1 intermediate, so Video2X's timestamps come out correct. Restamping happens only without B-frames, and **the `timestamps` gate now checks the presentation order.**
+11. **The tail in MP4:** the two-frame suffix was encoded with a 1/30000 timebase and the file with 1/16000, so concatenation multiplied its timestamps by 1.875 (b001's tail at 2706 seconds). → The file's own timebase, a duration correction in the concat list, the frame rate taken from the source, and a check of the last frame's position before acceptance. The guard had already caught it (duration gate), so the file was not delivered.
+12. **The protection hook** blocked merely listing the Video2X models folder → it now only blocks actually running Video2X with an anime processor without `anime`.
 
-### 3.8 العينتان 06 و07، ونسبة البكسل، والتثبيت لأول مرة (2026-11-17)
+### 3.8 Samples 06 and 07, pixel aspect ratio, and first-time installation (2026-11-17)
 
-**النتيجة:** نجحت العينتان في كل البوابات بالإعدادات الحالية، دون تعديل في مسار الأنمي. لكن الدراسة كشفت عيباً في الأمانة الهندسية، لم تكن أي بوابة تفحصه:
+**Result:** both samples passed every gate with the current settings, with no change to the anime path. But the study uncovered a geometric-fidelity flaw that no gate was checking:
 
-13. **نسبة البكسل (SAR) تضيع.** المحرك المجاني يقرأ الإطارات من أنبوب خام لا يحمل نسبة البكسل، فحوّل PAL ‏720×576 بنسبة 16:15 (يُعرض 4:3) إلى 1440×1152 بنسبة 1:1 (يُعرض 5:4): **كل وجه أضيق بنسبة 6.7%**، ولم يلحظ الحارس ذلك لأنه يقارن الإطارات بعد تحجيمها. وأسقط Video2X 6.4 نسبة Sample06 غير المعتادة 11696:11565 (فرق −1.1%)، مع أنه حفظ 16:15 و8:9. ← ثلاثة إصلاحات:
-    - `setsar` في مرمّز المحرك المجاني (إصلاح الجذر).
-    - `media.fix_aspect`: إعادة دمج بلا ترميز، تضبط وسم الحاوية و VUI في H.264/HEVC، بعد كل محرك ودمج ومعالجة أولى، وفي النهاية مقابل الأصل.
-    - **بوابة `aspect` جديدة:** ترفض أي تغيّر في نسبة العرض يتجاوز 0.5%.
+13. **The pixel aspect ratio (SAR) gets lost.** The free engine reads frames from a raw pipe that carries no pixel aspect ratio, so it turned PAL 720×576 at 16:15 (displayed as 4:3) into 1440×1152 at 1:1 (displayed as 5:4): **every face 6.7% narrower**, and the guard did not notice because it compares the frames after scaling them. Video2X 6.4 also dropped Sample06's unusual ratio 11696:11565 (a −1.1% difference), although it preserved 16:15 and 8:9. → Three fixes:
+    - `setsar` in the free engine's encoder (the root fix).
+    - `media.fix_aspect`: a remux without re-encoding that sets the container tag and the VUI in H.264/HEVC, after every engine, mux and pre-pass, and at the end against the original.
+    - **A new `aspect` gate:** rejects any change in the display aspect ratio greater than 0.5%.
 
-    جُرّب كل ذلك على b001 (16:15) و Sample06، وأُصلح ناتج Sample06 المسلَّم بإعادة الدمج ثم أُعيد فحصه: نجح.
-14. **خطاف الحماية منع أمر تحليل** (`ffmpeg -i x.avi -f null -`) ظناً أن الإدخال هو الإخراج. ← صار يستثني كل ما يلي `-i` من قائمة المخرجات.
-15. **الكشف الآلي عن الأنمي فشل مرة أخرى:** Sample07 درجته 0.23، ووُجد فيه «وجه» حقيقي (مرسوم). ← يبقى القرار من ورقة الإطارات، أو من المستخدم.
+    All of this was tested on b001 (16:15) and Sample06, and the delivered Sample06 output was fixed by remuxing and then re-checked: it passed.
+14. **The protection hook blocked an analysis command** (`ffmpeg -i x.avi -f null -`), mistaking the input for the output. → It now excludes everything following `-i` from the list of outputs.
+15. **Automatic anime detection failed again:** Sample07 scored 0.23, and a real "face" (a drawn one) was found in it. → The decision stays with the frame sheet, or with the user.
 
-**التثبيت لأول مرة:** كان المستخدم الجديد سيواجه ثلاث عقبات:
-- لا يوجد مثبّت لـ Video2X ولا لنماذج الوجه، وهما خارج التوزيع (`tools/` في .gitignore).
-- `.mcp.json` يشير إلى مسار ثابت على جهاز المالك.
-- مجلد النتائج `D:/VidIMG` قد لا يوجد على جهاز آخر.
+**First-time installation:** a new user would have faced three obstacles:
+- There is no installer for Video2X or for the face models, and both are outside the distribution (`tools/` is in .gitignore).
+- `.mcp.json` points to a fixed path on the owner's machine.
+- The results folder `D:/VidIMG` may not exist on another machine.
 
-← أُضيف `python -m vidimg.setup` (و `/setup-vidimg` في Claude Code)، أمر واحد يتحقق من كل شيء ويثبّته، ويمكن إعادة تشغيله:
-- **المتطلبات الأساسية:** النظام، و FFmpeg (من winget بعد السؤال)، وحزم Python.
-- **ما يُنزَّل ببصمات SHA-256 مثبّتة:** نماذج الوجه، و PyTorch مع النماذج، و Video2X، و VapourSynth.
-- **ربط Claude Code:** مسارات هذا الجهاز ومجلد النتائج، مع الإبقاء على الخطاف والصلاحيات.
+→ Added `python -m vidimg.setup` (and `/setup-vidimg` in Claude Code), a single command that checks and installs everything and can be rerun:
+- **Core requirements:** the operating system, FFmpeg (from winget, after asking), and Python packages.
+- **Downloaded with pinned SHA-256 hashes:** the face models, PyTorch with the models, Video2X, and VapourSynth.
+- **Connecting Claude Code:** this machine's paths and the results folder, while keeping the hook and the permissions.
 
-ومجلد نتائج على قرص غير موجود يرجع إلى `workspace/`، ويعرض `doctor` مجلد النتائج ومساحته الحرة.
+A results folder on a drive that does not exist falls back to `workspace/`, and `doctor` shows the results folder and its free space.
 
-**قيس على نسخة نظيفة** من المشروع (662 KB بلا `tools/`):
-- التثبيت الكامل استغرق **6 دقائق** وانتهى بـ READY: 8 نماذج، و PyTorch 2.14.1+cu130 يرى البطاقة، و Video2X، و VapourSynth.
-- ثم نجحت فيها استعادة صورة، واستعادة فيديو PAL بالمسار الحقيقي (RealESRNet، ‏1350×1080 بنسبة 16:15، كل البوابات بما فيها `aspect`).
+**Measured on a clean copy** of the project (662 KB without `tools/`):
+- The full installation took **6 minutes** and ended with READY: 8 models, PyTorch 2.14.1+cu130 seeing the card, Video2X, and VapourSynth.
+- Then a photo restoration and a PAL video restoration through the real path both succeeded on it (RealESRNet, 1350×1080 at 16:15, every gate including `aspect`).
 
-دليل المستخدم بالعربية: [GUIDE.ar.md](GUIDE.ar.md).
+User guide: [GUIDE.md](GUIDE.md).
 
 ---
 
-## 4. المعمارية
+## 4. Architecture
 
 ```
-┌──────────────────────────── Claude Code ─────────────────────────────┐
-│ Skill: restore-media · أوامر: /restore-photo /restore-video          │
-│        /analyze-media /restore-jobs · خطاف حماية (PreToolUse)         │
-└────────────────┬─────────────────────────────────────────────────────┘
-                 │ MCP (stdio) · مهام في الخلفية بقفل GPU واستئناف
-┌────────────────▼────────────── vidimg (Python 3.14) ─────────────────┐
-│ probe ← analyze → plan → (pre-pass تقليدي) → previews → run → guard   │
-│                                                                      │
-│  الصور:   SCUNet (ضجيج) → BSRNet/RealESRNet/SwinIR   [tools/sr-venv]   │
-│  الفيديو: QTGMC/TIVTC [AviSynth+ | VapourSynth | ffmpeg]               │
-│           → RealESRNet/BSRNet أو general-v3 (أجزاء قابلة للاستئناف)    │
-│  الأنمي:  Video2X (Real-CUGAN / Real-ESRGAN anime)                    │
-│  الحارس: YuNet+SFace · بنية · لون · هلوسة · وميض · VMAF (ffmpeg)       │
-└──────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────── Claude Code ────────────────────────────────────────────┐
+│ Skill: restore-media · Commands: /restore-photo /restore-video                      │
+│        /analyze-media /restore-jobs · Protection hook (PreToolUse)                  │
+└────────────────┬────────────────────────────────────────────────────────────────────┘
+                 │ MCP (stdio) · background jobs with a GPU lock and resume
+┌────────────────▼────────────── vidimg (Python 3.14) ────────────────────────────────┐
+│ probe → analyze → plan → (classical pre-pass) → previews → run → guard              │
+│                                                                                     │
+│  Photos: SCUNet (noise) → BSRNet/RealESRNet/SwinIR   [tools/sr-venv]                │
+│  Video:  QTGMC/TIVTC [AviSynth+ | VapourSynth | ffmpeg]                             │
+│          → RealESRNet/BSRNet or general-v3 (resumable chunks)                       │
+│  Anime:  Video2X (Real-CUGAN / Real-ESRGAN anime)                                   │
+│  Guard:  YuNet+SFace · structure · color · hallucination · flicker · VMAF (ffmpeg)  │
+└─────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-| الوحدة | الدور |
+| Module | Role |
 |---|---|
-| `vidimg/adapters/free_sr.py` + `sr_runner.py` | النماذج المفتوحة للصور والفيديو (بلاطات، دفعات، معدل كسري دقيق) |
-| `vidimg/adapters/video2x.py` | الأنمي والاستيفاء |
-| `vidimg/adapters/avisynth.py` / `vapoursynth.py` | معالجة الحقول التقليدية |
-| `vidimg/media.py` | ffmpeg/ffprobe، والمرمّزات، ووسوم اللون |
-| `vidimg/pipeline.py` / `pipeline_video.py` / `batch.py` | محرك القرار والدفعات والأجزاء |
-| `vidimg/guard/` | الحارس |
-| `vidimg/proc.py` | تشغيل البرامج مع سجل أدلة، ورفض أي برنامج مدفوع |
+| `vidimg/adapters/free_sr.py` + `sr_runner.py` | Open models for photos and video (tiles, batches, exact fractional frame rate) |
+| `vidimg/adapters/video2x.py` | Anime and interpolation |
+| `vidimg/adapters/avisynth.py` / `vapoursynth.py` | Classical field processing |
+| `vidimg/media.py` | ffmpeg/ffprobe, encoders, and color tags |
+| `vidimg/pipeline.py` / `pipeline_video.py` / `batch.py` | Decision engine, batches and chunks |
+| `vidimg/guard/` | The guard |
+| `vidimg/proc.py` | Running programs with an evidence log, and refusing any paid program |
 
 ---
 
-## 5. محرك القرار
+## 5. Decision engine
 
-### 5.1 الصور
+### 5.1 Photos
 ```
-1) analyze → profile (ضجيج، وحدّة، وجودة JPEG، والوجوه وأحجامها، وكشف الأنمي)
-2) أنمي ولا وجه حقيقي     → Video2X: Real-CUGAN ثم Real-ESRGAN anime
-3) ضجيج                  → SCUNet أولاً
-4) كبيرة أصلاً (> 2000)   → لا تكبير
-5) التكبير (×4 إن كانت ≤ 900، وإلا ×2): BSRNet ثم RealESRNet ثم SwinIR، مع تحجيم دقيق للحجم المطلوب
-6) الحارس: يُسلَّم أول ناتج نظيف، وإلا أول ناتج بتنبيه، وإلا يبقى الأصل
+1) analyze → profile (noise, sharpness, JPEG quality, faces and their sizes, anime detection)
+2) Anime, no real face     → Video2X: Real-CUGAN, then Real-ESRGAN anime
+3) Noise                   → SCUNet first
+4) Already large (> 2000)  → no upscaling
+5) Upscaling (×4 if ≤ 900, otherwise ×2): BSRNet, then RealESRNet, then SwinIR, with exact resizing to the requested size
+6) Guard: deliver the first clean output, otherwise the first output with a warning, otherwise keep the original
 ```
 
-### 5.2 الفيديو
+### 5.2 Video
 ```
-1) analyze (idet مع الحقول المكررة، والضغط، والضجيج، والقطعات، والوجوه)
-2) تلسيني  → TFM+TDecimate · متداخل → QTGMC بمعدل مضاعف · حارس للمعالجة الأولى
-3) أنمي    → Video2X ×2
-4) المرشحون: RealESRNet → BSRNet → general-v3 (أو general-v3 وحده إن تجاوز التقدير 3 ساعات)
-5) معاينات بالحارس على 3 مقاطع، ثم تشغيل كامل (أجزاء إن تجاوز 5 دقائق)، ثم حارس نهائي
-6) الإخراج HEVC 10-bit (NVENC، أو x265 بدون NVIDIA) مع الصوت والبيانات الوصفية
+1) analyze (idet with repeated fields, compression, noise, scene cuts, faces)
+2) Telecine  → TFM+TDecimate · interlaced → QTGMC at double rate · guard for the pre-pass
+3) Anime     → Video2X ×2
+4) Candidates: RealESRNet → BSRNet → general-v3 (or general-v3 alone if the estimate exceeds 3 hours)
+5) Previews with the guard on 3 clips, then a full run (chunks if over 5 minutes), then a final guard
+6) Output HEVC 10-bit (NVENC, or x265 without NVIDIA) with audio and metadata
 ```
 
 ---
 
-## 6. التكامل مع Claude Code
+## 6. Claude Code integration
 
-- **خادم MCP** (`vidimg/mcp_server.py`، عشر أدوات):
-  - التحليل والتشغيل: `doctor` · `analyze_media` · `restore_photos` · `restore_video`
-  - إدارة المهام: `job_status` · `list_jobs` · `cancel_job` · `resume_job`
-  - التحقق والمقارنة: `verify_restoration` · `compare_frames`
-- **مهارة `restore-media`** وأربعة أوامر.
-- **خطاف حماية:**
-  - **يمنع** كتابة ffmpeg فوق مدخله.
-  - **يمنع** نماذج الأنمي على غير الأنمي.
-  - **يسأل** قبل حذف أو نقل أو كتابة صورة أو فيديو خارج مساحة العمل.
+- **MCP server** (`vidimg/mcp_server.py`, ten tools):
+  - Analysis and running: `doctor` · `analyze_media` · `restore_photos` · `restore_video`
+  - Job management: `job_status` · `list_jobs` · `cancel_job` · `resume_job`
+  - Verification and comparison: `verify_restoration` · `compare_frames`
+- **`restore-media` skill** and four commands.
+- **Protection hook:**
+  - **Blocks** ffmpeg from writing over its own input.
+  - **Blocks** anime models on non-anime content.
+  - **Asks** before deleting, moving, or writing a photo or video outside the workspace.
 
 ---
 
-## 7. خارطة الطريق
+## 7. Roadmap
 
-| المرحلة | المحتوى | الحالة |
+| Stage | Content | Status |
 |---|---|---|
-| 0. التهيئة | `doctor` ومتطلبات مقفلة (`free_install`، `vs_install`، `avs_install`) | ✅ |
-| 1. المحوّلات | `free_sr` (صور وفيديو)، و`video2x`، و`avisynth` / `vapoursynth`، و`media` | ✅ |
-| 2. التحليل والحارس | `probe/`، و`guard/`، والمعايرة على صورك ومقاطعك | ✅ |
-| 3. محرك القرار | `pipeline.py` و`pipeline_video.py` ومعالجة الحقول التقليدية وتوجيه الأنمي | ✅ |
-| 4. Claude Code | MCP، ومهارة، وأوامر، وخطاف، ومهام خلفية | ✅ |
-| 5. الدفعات والأداء | تجميع الصور، وأجزاء فيديو قابلة للاستئناف، وطابور GPU | ✅ |
-| 6. القبول | حكمك على 19 صورة: «كل الوجوه سليمة» · فيديو الواتساب بـ RealESRNet: «الوجوه سليمة» · مقطع كرتوني سُلّم عبر Video2X | ✅ |
-| إعادة معايرة الفيديو | بوابات الفيديو على النماذج المجانية: VMAF باقٍ على 4.0، والحارس 31/33 أميناً و9/10 ضاراً (انظر 3.4) | ✅ |
-| إزالة الضبابية (اختيارية) | NAFNet-GoPro على الصور «الناعمة» فقط، بوضع حارس خاص (انظر 3.6) | ✅ |
-| مقترح | دعم Linux (المهام الخلفية وحدها خاصة بـ Windows) | ⏳ |
+| 0. Setup | `doctor` and pinned requirements (`free_install`, `vs_install`, `avs_install`) | ✅ |
+| 1. Adapters | `free_sr` (photos and video), `video2x`, `avisynth` / `vapoursynth`, and `media` | ✅ |
+| 2. Analysis and guard | `probe/`, `guard/`, and calibration on your photos and clips | ✅ |
+| 3. Decision engine | `pipeline.py`, `pipeline_video.py`, classical field processing, and anime routing | ✅ |
+| 4. Claude Code | MCP, skill, commands, hook, and background jobs | ✅ |
+| 5. Batches and performance | Photo grouping, resumable video chunks, and a GPU queue | ✅ |
+| 6. Acceptance | Your verdict on 19 photos: "all faces intact" · WhatsApp video with RealESRNet: "faces intact" · a cartoon clip delivered via Video2X | ✅ |
+| Video recalibration | Video gates on the free models: VMAF stays at 4.0, and the guard 31/33 faithful and 9/10 harmful (see 3.4) | ✅ |
+| Deblurring (optional) | NAFNet-GoPro on "soft" photos only, with a special guard mode (see 3.6) | ✅ |
+| Proposed | Linux support (only the background jobs are Windows-specific) | ⏳ |
 
 ---
 
-## 8. سلوكيات خفية وحلولها (الأدوات المجانية)
+## 8. Hidden behaviors and their fixes (free tools)
 
-| # | الأداة | السلوك | الحل |
+| # | Tool | Behavior | Fix |
 |---|---|---|---|
-| F1 | AviSynth+ | `AddAutoloadDir` في 3.7.5 بلا `utf8=` · QTGMC يُخرج معدل 19001/317 · L-SMASH يكتب `.lwi` بجوار المصدر | `AssumeFPS` صريح · `cachefile=` داخل مساحة العمل |
-| F2 | ffmpeg | Matroska بطوابع بالمللي ثانية يكسر المعدل الدقيق، ومقارنة الإطارات بالطابع الزمني تخطئ، و10-bit إلى 8-bit يضيف dither | وسيط FFV1 في NUT · المقاييس بالترتيب وبعمق 10-bit |
-| F3 | idet | يسمّي التلسيني «TFF» | التلسيني = نسبة الحقول المكررة ≥ 0.2 |
-| F4 | NUT | لا يحفظ وسوم اللون | ملف جانبي `.colour.json` يُطبَّق بـ `setparams` |
-| F5 | كامل المدى | مصدر `yuvj` يضغط المستويات في الإخراج | تحويل كامل إلى محدود في المعالجة الأولى (بلا فقد عند 10-bit) |
-| F6 | الحارس | VMAF يزاوج بالطابع الزمني | المزاوجة بالترتيب |
-| F7 | VapourSynth | R73+ يرفض إضافات API 3، وvsrepo يحتاج R80+ | التثبيت على R82 ثم تثبيت النواة على R72 في بيئة معزولة |
-| F8 | ffmpeg 8 | وسوم اللون في الإخراج مع مدخل Y4M تُدرج تحويلاً | لا وسوم في أوامر الوسيط |
-| F9 | MCP stdio | العمليات الفرعية ترث قناة البروتوكول فتعلق | عزل المقابض عند بدء الخادم |
-| F10 | ffmpeg | القص بنسخ التدفق يترك قائمة تحرير (665 مقابل 601 إطاراً) | القص بالفك (`-ss`/`-t`) |
-| F11 | النماذج الثقيلة | إطار HD كامل يملأ الذاكرة فيتحول Windows لذاكرة النظام | بلاطات 384 بكسل وإطار واحد في كل مرة |
-| F12 | المعدل | رقم عشري مقرّب حوّل 60000/1001 إلى 599401/10000 | المعدل الكسري الدقيق |
-| F13 | الحارس | المقارنة بالمدخل المتضرر تكافئ نسخ عيوبه | القرارات على الأصل الحقيقي (`bench_free.py`) |
-| F14 | ffmpeg (فك الترميز للنموذج) | الإخراج الخام بمعدل ثابت (الافتراضي) يكرر الإطار الأول إن كان في طوابع المصدر فراغ (121 ← 122)، فتنزاح كل الإطارات التالية بإطار واحد ويرى الحارس «وجوهاً متغيرة» في المشاهد المتحركة | `-fps_mode passthrough` في فك الترميز (`free_sr.run`) |
-| F15 | Video2X 6.4.0 | يسقط آخر إطارين، ويغيّر توقيت الصورة عن الصوت، ويكتب طوابع صفرية مع MPEG-4 Part 2 | `video2x._restore_tail` و`_fix_timestamps` و`media.fix_av_offset` |
-| F16 | المصدر | فيديو يبدأ بعد الصوت (Sample04: 0.2 ث) يفقد الإزاحة إذا بدأ الترميز من صفر | `fix_av_offset` وبوابة `av_sync` |
-| F17 | MP4 | لا يقبل ترجمة ASS (يفشل الكتابة كلها) | MKV تلقائياً و`carry_side_streams` |
-| F18 | AVI/MPEG-4 Part 2 | لا طوابع عرض، وعدد الإطارات في الرأس يزيد إطاراً عن المفكوك | عدّ الحزم، وإعادة الختم، وVMAF محدود بعدد الإطارات |
-| F19 | التحليل | الرسوم القديمة المضغوطة تُقاس كفيديو حقيقي، وYuNet يرى وجوهاً في الرسوم | `--content` ولوحة الإطارات |
-| F20 | Video2X 6.4.0 | لا يعمل NVENC فيه بلا B-frames (`--max-b-frames 0` يفشل، و`-e bf=0` يُتجاهَل)؛ وقاعدة زمن الذيل المختلفة في MP4 تضخّم طوابعه عند الدمج | وسيط FFV1 للمصادر بلا طوابع، و`-video_track_timescale`، وفحص ترتيب العرض |
+| F1 | AviSynth+ | `AddAutoloadDir` in 3.7.5 without `utf8=` · QTGMC outputs a 19001/317 rate · L-SMASH writes `.lwi` next to the source | Explicit `AssumeFPS` · `cachefile=` inside the workspace |
+| F2 | ffmpeg | Matroska with millisecond timestamps breaks exact frame rates, comparing frames by timestamp goes wrong, and 10-bit to 8-bit adds dither | FFV1 intermediate in NUT · metrics by order and at 10-bit depth |
+| F3 | idet | Labels telecine as "TFF" | Telecine = repeated-field ratio ≥ 0.2 |
+| F4 | NUT | Does not keep color tags | `.colour.json` sidecar file applied with `setparams` |
+| F5 | Full range | A `yuvj` source compresses the levels in the output | Full-to-limited conversion in the pre-pass (lossless at 10-bit) |
+| F6 | Guard | VMAF pairs frames by timestamp | Pairing by order |
+| F7 | VapourSynth | R73+ rejects API 3 plugins, and vsrepo needs R80+ | Install R82, then pin the core to R72 in an isolated environment |
+| F8 | ffmpeg 8 | Color tags on the output with a Y4M input insert a conversion | No tags in intermediate commands |
+| F9 | MCP stdio | Subprocesses inherit the protocol channel and hang | Handle isolation at server start |
+| F10 | ffmpeg | Trimming with stream copy leaves an edit list (665 vs 601 frames) | Trimming by decoding (`-ss`/`-t`) |
+| F11 | Heavy models | A full HD frame fills the memory, so Windows falls back to system memory | 384-pixel tiles and one frame at a time |
+| F12 | Frame rate | A rounded decimal number turned 60000/1001 into 599401/10000 | Exact fractional frame rate |
+| F13 | Guard | Comparing against the damaged input rewards copying its defects | Decisions on the true original (`bench_free.py`) |
+| F14 | ffmpeg (decoding for the model) | Raw output at a constant frame rate (the default) duplicates the first frame if there is a gap in the source timestamps (121 → 122), so every following frame shifts by one and the guard sees "changed faces" in moving scenes | `-fps_mode passthrough` in decoding (`free_sr.run`) |
+| F15 | Video2X 6.4.0 | Drops the last two frames, shifts the video timing relative to the audio, and writes zero timestamps with MPEG-4 Part 2 | `video2x._restore_tail`, `_fix_timestamps` and `media.fix_av_offset` |
+| F16 | Source | Video that starts after the audio (Sample04: 0.2 s) loses the offset if encoding starts from zero | `fix_av_offset` and the `av_sync` gate |
+| F17 | MP4 | Does not accept ASS subtitles (the whole write fails) | MKV automatically and `carry_side_streams` |
+| F18 | AVI/MPEG-4 Part 2 | No presentation timestamps, and the frame count in the header is one more than what decodes | Packet counting, restamping, and VMAF bounded by frame count |
+| F19 | Analysis | Old compressed cartoons measure like real video, and YuNet sees faces in drawings | `--content` and the frame sheet |
+| F20 | Video2X 6.4.0 | Its NVENC does not work without B-frames (`--max-b-frames 0` fails, and `-e bf=0` is ignored); and the tail's different timebase in MP4 inflates its timestamps on concatenation | FFV1 intermediate for sources without timestamps, `-video_track_timescale`, and a presentation-order check |
 
 ---
 
-## 9. سجل الأدلة
+## 9. Evidence log
 
-| # | الدليل | المكان |
+| # | Evidence | Location |
 |---|---|---|
-| D1 | الصور مقابل الأصل الحقيقي | `vidimg/bench_free.py` · `workspace/calibration/20261114-235009/summary_free.json` |
-| D2 | الفيديو مقابل الأصل الحقيقي والسرعة | `vidimg/bench_free_video.py` · `workspace/bench_free/` |
-| D3 | دراسة AviSynth+ وقرار المحرك | `research/avisynth/01–05` · `research/avisynth/vs_parity.py` |
-| D4 | معايرة الحارس | `workspace/state/guard_thresholds.json` · `workspace/calibration/` · `workspace/calibration_video/` (المجانية: `20261116-153325`) |
-| D5 | القبول البشري | `workspace/acceptance/index.html` · `workspace/acceptance/human_verdict.json` |
-| D6 | الاستئناف والفيديو الطويل | `workspace/review_video/mbz_full/` · `workspace/jobs/` |
-| D7 | المتطلبات المقفلة | `tools/free-models/lock.json` · `tools/vapoursynth/lock.json` · `tools/avisynth/lock.json` |
-| D9 | قياس إزالة الضبابية | `workspace/bench_deblur/summary.json` · `tools/free-models-trial/SOURCES.json` |
-| D8 | تاريخ Topaz المُزال | `archive/topaz/` (الشيفرة والخطة السابقة) |
+| D1 | Photos against the true original | `vidimg/bench_free.py` · `workspace/calibration/20261114-235009/summary_free.json` |
+| D2 | Video against the true original, and speed | `vidimg/bench_free_video.py` · `workspace/bench_free/` |
+| D3 | AviSynth+ study and the engine decision | `research/avisynth/01–05` · `research/avisynth/vs_parity.py` |
+| D4 | Guard calibration | `workspace/state/guard_thresholds.json` · `workspace/calibration/` · `workspace/calibration_video/` (free: `20261116-153325`) |
+| D5 | Human acceptance | `workspace/acceptance/index.html` · `workspace/acceptance/human_verdict.json` |
+| D6 | Resumption and long video | `workspace/review_video/mbz_full/` · `workspace/jobs/` |
+| D7 | Pinned requirements | `tools/free-models/lock.json` · `tools/vapoursynth/lock.json` · `tools/avisynth/lock.json` |
+| D9 | Deblurring measurement | `workspace/bench_deblur/summary.json` · `tools/free-models-trial/SOURCES.json` |
+| D8 | Removed Topaz history | `archive/topaz/` (the code and the previous plan) |

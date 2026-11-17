@@ -83,7 +83,7 @@ portable VapourSynth engine, and finally points `.mcp.json` / `.claude/settings.
 project folder and output folder (other settings kept). Every download is an official release checked against a
 pinned SHA-256. `--check` verifies without changing anything; `--yes` asks nothing. Re-running repairs.
 Measured on a fresh copy of the project (no tools/): see PLAN.md 3.8. In Claude Code, `/setup-vidimg` does the same
-with explanations. Arabic step-by-step guide: [GUIDE.ar.md](GUIDE.ar.md).
+with explanations. Step-by-step guide: [GUIDE.md](GUIDE.md).
 
 Only `tools/*/manifest.json` and `tools/*/lock.json` are distributed; everything else in `tools/` is downloaded.
 

@@ -7,7 +7,7 @@ description: Faithfully restore personal photos and videos (upscale, denoise, de
 
 The goal is **more quality without changing who or what is in the picture**: recover missing pixels,
 never invent a different face. A result that fails the guard is not delivered; the original stays the
-deliverable. Talk to the person in **Arabic** (they write in Arabic); keep file paths and technical
+deliverable. Report to the person in **English**, even when they write in another language; keep file paths and technical
 names as they are. **Only free tools are used**; never suggest or run paid software.
 
 ## First use on a machine
@@ -43,7 +43,7 @@ If the MCP tools are not available, the same pipeline runs from the shell:
 2. Start the job. Default outputs go to `<VIDIMG_OUTPUT or workspace>/review*/<time>/`; never choose an output folder that
    holds originals (the tool refuses it anyway).
 3. Poll `job_status` until `done`/`failed`. While it runs, relay progress sparingly.
-4. Report from the job result, in Arabic:
+4. Report from the job result, in English:
    - delivered or not, per file; for videos the chosen model, the classical pre-pass (if any) and the
      final gates (VMAF, identity, structure, colour, flicker);
    - the report page path (`report` field) so the person can look at the before/after frames;
