@@ -206,10 +206,11 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
         worker_cmd = [str(mlrt_install.VS_PY), "-I", str(MLRT_RUNNER)]
     else:
         spec = {"model": str(model_file(st.model)), "width": w, "height": h, "out_width": ow, "out_height": oh}
-        if heavy and w * h > 300_000:
-            # heavy (RRDB/Swin) models on whole HD frames overflow VRAM and Windows silently falls back to
-            # system memory (observed: 16 min stuck on 150 frames at 720p): tile them, one frame at a time
-            spec.update(tile=384, batch=1)
+        if heavy:
+            # heavy (RRDB/Swin) models: four batched 720p frames overflowed VRAM and Windows silently fell back
+            # to system memory (16 min stuck on 150 frames). The worker sizes it from the card's memory now:
+            # whole frames when they fit (no tile seams), otherwise 512-px tiles one frame at a time
+            spec.update(tile="auto", batch="auto", heavy=True)
         worker_cmd = [str(PYTHON), "-I", str(RUNNER), "video"]
     sp = dst.parent / f".{dst.stem}.spec.json"
     sp.write_text(json.dumps(spec), encoding="utf-8")
