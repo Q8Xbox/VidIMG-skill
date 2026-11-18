@@ -3,6 +3,7 @@
 doctor [--json]                    environment report (open-model runtime, ffmpeg, classical engines, GPU)
 restore PHOTOS_OR_FOLDERS [--out]  photo pipeline: analyse, restore, guard, review page
 restore-video VIDEO [--out]        video pipeline: field handling, guarded previews, full run, report
+restore-series FOLDER [--episodes] numbered episodes into ONE folder, resumable, + one series report
 analyze FILE                       measured degradation profile of a photo or video (writes nothing)
 verify ORIGINAL RESULT             fidelity guard on any pair (photo or video)
 upscale IMG OUTDIR --model M       one open model on one photo (bsrnet_x4, realesrnet_x4, swinir_real_x4, ...)
@@ -55,6 +56,18 @@ def main(argv: list[str] | None = None) -> int:
                      help="anime/cartoon or real footage; auto trusts the probe (conservative: real unless sure)")
     rvv.add_argument("--model", default=None, choices=config.VIDEO_MODEL_CHOICES,
                      help="use only this model (default: the approved order, first that passes the guard)")
+
+    rs = sub.add_parser("restore-series",
+                        help="restore numbered episodes of one folder into ONE folder + one series comparison report")
+    rs.add_argument("folder", type=Path, help="folder holding the episodes (file names carry the episode number)")
+    rs.add_argument("--episodes", help="which episodes, e.g. 1-26 or 1,3,5-7 (default: all)")
+    rs.add_argument("--out", type=Path,
+                    help="output folder (default: a new 'VidIMG x2 - Episodes AA-BB' folder inside FOLDER)")
+    rs.add_argument("--scale", type=float, default=2, help="exact output scale (default 2)")
+    rs.add_argument("--content", default="auto", choices=["auto", "anime", "real"])
+    rs.add_argument("--model", default=None, choices=config.VIDEO_MODEL_CHOICES)
+    rs.add_argument("--encoder", default="hevc10", choices=sorted(media.ENCODERS))
+    rs.add_argument("--report-only", action="store_true", help="only rebuild the series report of OUT")
 
     an = sub.add_parser("analyze", help="measured degradation profile of an image or video")
     an.add_argument("path", type=Path)
@@ -119,6 +132,27 @@ def main(argv: list[str] | None = None) -> int:
                           "final_gates": rec.final_gates, "notes": rec.notes, "sheets": rec.sheets},
                          indent=1, ensure_ascii=False, default=str))
         return 0 if rec.passed or a.preview_only else 1
+
+    if a.cmd == "restore-series":
+        import time
+        from . import series
+        from .report import series_report
+        try:
+            wanted = series.parse_episodes(a.episodes)
+            if a.report_only:
+                episodes = series.find_episodes(a.folder, wanted)[0]
+                if not (a.out or episodes):
+                    raise ValueError(f"no numbered episodes found in {a.folder}")
+                print(f"report: {series_report.write(a.out or series.default_out_dir(a.folder, episodes, a.scale))}")
+                return 0
+            status = series.restore_series(a.folder, a.out, wanted, scale=a.scale, content=a.content,
+                                           model=a.model, encoder=a.encoder,
+                                           log=lambda m: print(time.strftime("%H:%M:%S"), m, flush=True))
+        except (ValueError, FileNotFoundError) as e:
+            print(f"error: {e}")
+            return 2
+        eps = [v for k, v in status.items() if not k.startswith("_")]
+        return 0 if eps and all(v.get("delivered") for v in eps) else 1
 
     if a.cmd == "restore":
         from datetime import datetime

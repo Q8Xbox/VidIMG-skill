@@ -272,6 +272,17 @@ That model is then the only candidate; if the guard rejects it, the original sta
 python -m vidimg restore-video "D:/Videos/episode.mp4" --content anime --scale 2 --model cugan-pro
 ```
 
+To do a whole series (or part of one) in one go, point `restore-series` at the folder. The episode number is
+read from each file name (`S01E05`, `Ep 05`, `Episode 5`, `Title - 05 [..]`). Every episode goes through the same
+guarded pipeline, all results land in ONE new folder inside the series folder (by default
+`VidIMG x2 - Episodes 01-26`), and at the end one English report compares original and enhanced for every
+episode: sharpness, edges, guard results, frame alignment, sizes, side-by-side frames and zooms. If it stops (power
+cut, restart), run the same command again: finished episodes are skipped. `--report-only` rebuilds just the report.
+
+```bash
+python -m vidimg restore-series "D:/Videos/My Series" --episodes 1-26 --content anime --scale 2
+```
+
 ```bash
 python -m vidimg restore "D:/Photos/1995" --out "D:/VidIMG/Photos1995"
 ```

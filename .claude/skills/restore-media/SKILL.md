@@ -33,6 +33,11 @@ After setup the person restarts Claude Code (a cloned project also approves the 
 If the MCP tools are not available, the same pipeline runs from the shell:
 `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" restore <files|folders> [--out DIR]` and
 `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" restore-video <video> [--out DIR] [--preview-only]`.
+For several numbered episodes of one series ("episodes 1 to 26"), use the shell command
+`python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" restore-series <folder> --episodes 1-26 [--content anime] [--scale 2]`:
+one output folder inside the series folder, resumable, and one English series comparison report at the end.
+It runs for hours (about 30 min per 24-min SD episode at x2): start it in the background and read
+`batch_status.json` in the output folder for progress.
 
 ## Workflow
 
