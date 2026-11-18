@@ -31,8 +31,14 @@ def _gpu() -> Check:
 
 
 def _engine_checks() -> list[Check]:
+    from . import mlrt_install
     from .adapters import avisynth, free_sr, vapoursynth
     out: list[Check] = []
+    m_ok, m_why = mlrt_install.available()
+    models = [k for k in mlrt_install.manifest()['models'] if mlrt_install.onnx_path(k).exists()]
+    out.append(Check("vs_mlrt", "ok" if m_ok and models else "info",
+                     f"vs-mlrt (ONNX Runtime DirectML, any DirectX 12 GPU): {', '.join(models) or 'no ONNX models'}"
+                     if m_ok else f"optional second engine for AMD/Intel GPUs: {m_why}"))
     ok, why = free_sr.available()
     if ok:
         r = subprocess.run([str(free_sr.PYTHON), "-I", "-c", "import torch;print(torch.__version__, torch.cuda.is_available(), "

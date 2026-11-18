@@ -16,6 +16,9 @@ tools/avisynth/*
 !tools/vapoursynth/
 tools/vapoursynth/*
 !tools/vapoursynth/lock.json
+!tools/vs-mlrt/
+tools/vs-mlrt/*
+!tools/vs-mlrt/manifest.json
 
 # machine-specific (written by setup) and private
 .mcp.json

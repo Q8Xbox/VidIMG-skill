@@ -15,7 +15,7 @@ that fails it is never delivered.
 
 Restart Claude Code, then run `/vidimg:setup-vidimg D:/VidIMG`: it installs and verifies everything (about 5 GB of
 free, SHA-256-pinned downloads into `%LOCALAPPDATA%\VidIMG`). From a clone: `python vidimg_run.py setup --output D:/VidIMG`.
-Requirements: Windows 10/11 64-bit, Python 3.12+ on PATH, an NVIDIA GPU. Install and usage guide: [GUIDE.md](GUIDE.md).
+Requirements: Windows 10/11 64-bit, Python 3.12+ on PATH, an NVIDIA GPU (AMD and Intel GPUs run the faithful video models through vs-mlrt / ONNX Runtime DirectML). Install and usage guide: [GUIDE.md](GUIDE.md).
 
 Design and evidence: [PLAN.md](PLAN.md) · every requirement and the install steps:
 [REQUIREMENTS.md](REQUIREMENTS.md).
@@ -66,7 +66,7 @@ Safety hook (`.claude/settings.json` → `vidimg/hooks/pretool.py`), before ever
 ```bash
 python -m vidimg doctor                                            # environment report
 python -m vidimg restore PHOTOS_OR_FOLDERS [--out DIR] [--deblur]  # photo pipeline + review page (--deblur: opt-in, soft photos only)
-python -m vidimg restore-video IN.mp4 [--out DIR] [--preview-only] [--scale 2] [--content anime|real|auto] [--model NAME]
+python -m vidimg restore-video IN.mp4 [--out DIR] [--preview-only] [--scale 2] [--content anime|real|auto] [--model NAME] [--engine auto|torch|mlrt]
                                                                    # video pipeline + report.html
 python -m vidimg restore-series FOLDER [--episodes 1-26] [--out DIR] [--scale 2] [--content anime|real|auto] [--model NAME]
                                                                    # numbered episodes into ONE folder (resumable) + one series report

@@ -185,6 +185,17 @@ def step_vapoursynth(log, check=False, **_) -> dict:
     return {"ok": ok, "notes": [] if ok else [f"{why} (interlaced/telecine fall back to ffmpeg bwdif/fieldmatch)"]}
 
 
+def step_vs_mlrt(log, check=False, **_) -> dict:
+    """Optional second engine: vs-mlrt (ONNX Runtime DirectML) for the faithful models on any DirectX 12 GPU."""
+    from . import mlrt_install
+    if not check:
+        r = mlrt_install.install(log=log)
+        if r["errors"]:
+            return {"ok": False, "notes": r["errors"] + ["optional: without it, non-NVIDIA GPUs use the slow CPU path"]}
+    ok, why = mlrt_install.available("realesrnet_x4")
+    return {"ok": ok, "notes": [] if ok else [f"{why} (optional: only needed on AMD/Intel GPUs)"]}
+
+
 def _is_plugin() -> bool:
     """Installed through the Claude Code plugin marketplace (the plugin itself provides the MCP server and hook)."""
     return config.HOME != config.PROJECT_ROOT and "/.claude/plugins/" in config.PROJECT_ROOT.as_posix().lower()
@@ -226,7 +237,7 @@ def step_claude_code(log, output: str | None = None, yes=False, check=False, **_
 
 STEPS = [("system", step_system), ("ffmpeg", step_ffmpeg), ("python packages", step_python_packages),
          ("face models", step_face_models), ("open models + PyTorch", step_models), ("Video2X", step_video2x),
-         ("VapourSynth", step_vapoursynth), ("Claude Code", step_claude_code)]
+         ("VapourSynth", step_vapoursynth), ("vs-mlrt", step_vs_mlrt), ("Claude Code", step_claude_code)]
 REQUIRED = {"system", "ffmpeg", "python packages", "face models", "open models + PyTorch", "Claude Code"}
 
 

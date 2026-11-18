@@ -1,0 +1,20 @@
+{
+ "_comment": "Second engine for the faithful video models: vs-mlrt (ONNX Runtime with DirectML, so NVIDIA, AMD and Intel GPUs) inside VidIMG's own VapourSynth (tools/vs-venv). Official AmusementClub/vs-mlrt release assets, SHA-256 pinned from the GitHub release digests. The ONNX models are NOT downloaded: python -m vidimg.mlrt_install converts the official weights already pinned in tools/free-models/lock.json and checks each file against PyTorch before use.",
+ "release": "v15.16",
+ "license": "GPL-3.0 (vs-mlrt), MIT (ONNX Runtime, DirectML redistributable)",
+ "project": "AmusementClub/vs-mlrt",
+ "assets": {
+  "VSORT-Windows-x64.v15.16.7z": {
+   "url": "https://github.com/AmusementClub/vs-mlrt/releases/download/v15.16/VSORT-Windows-x64.v15.16.7z",
+   "size": 59149293,
+   "sha256": "cf515d852b5b61445ddedc53d4275a372d71edbed7ba7a2c64c8c3fbb5e95a89"
+  },
+  "scripts.v15.16.7z": {
+   "url": "https://github.com/AmusementClub/vs-mlrt/releases/download/v15.16/scripts.v15.16.7z",
+   "size": 17732,
+   "sha256": "d07dae0a00cb8dbf4f00358f640f630ff5d933de44d27050e7acce4f31cc3560"
+  }
+ },
+ "pip_pins_sr_venv": ["onnx==1.23.2", "onnxscript==0.7.2", "onnxruntime-directml==1.24.4"],
+ "models": ["realesrnet_x4", "bsrnet_x4", "general_x4v3"]
+}

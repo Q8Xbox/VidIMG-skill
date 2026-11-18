@@ -36,8 +36,10 @@ If the MCP tools are not available, the same pipeline runs from the shell:
 For several numbered episodes of one series ("episodes 1 to 26"), use the shell command
 `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" restore-series <folder> --episodes 1-26 [--content anime] [--scale 2]`:
 one output folder inside the series folder, resumable, and one English series comparison report at the end.
-It runs for hours (about 30 min per 24-min SD episode at x2): start it in the background and read
+The series command runs for hours (about 30 min per 24-min SD episode at x2): start it in the background and read
 `batch_status.json` in the output folder for progress.
+Both video commands take `--engine auto|torch|mlrt` (MCP: `engine`): leave it on auto (PyTorch on NVIDIA, vs-mlrt / ONNX Runtime
+DirectML on AMD or Intel GPUs) unless the person asks.
 
 ## Workflow
 
