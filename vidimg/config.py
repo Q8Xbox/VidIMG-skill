@@ -88,6 +88,10 @@ def classical_engines() -> tuple[str, ...]:
 # Video models a person can ask for by name (restore-video --model / restore_video(model=...)); the default is
 # the approved order, first candidate that passes the guard
 VIDEO_MODEL_CHOICES = ("esrgan-v3", "cugan", "cugan-pro", "general-v3", "realesrnet", "bsrnet")
+# engine for the open video models (RealESRNet, BSRNet, general-v3): auto = PyTorch where CUDA works, otherwise
+# vs-mlrt (ONNX Runtime DirectML: AMD / Intel GPUs); torch / mlrt force one. CLI --engine sets it per run.
+VIDEO_ENGINE_CHOICES = ("auto", "torch", "mlrt")
+VIDEO_ENGINE = os.environ.get("VIDIMG_VIDEO_ENGINE", "auto")
 
 # Video2X processors that must never touch real human faces (benchmark: identity 0.77-0.81).
 VIDEO2X_ANIME_ONLY = frozenset({"realesrgan", "realcugan", "libplacebo"})

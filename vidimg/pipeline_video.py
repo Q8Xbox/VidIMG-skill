@@ -401,7 +401,8 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
             choice_file.unlink()               # a different file under the same name: choose again
     rec = VideoRecord(str(src), prof.to_dict(), "")
     rec.plan, cands = plan_candidates(prof, scale, content, model)
-    options = {"scale": scale, "content": content} | ({"model": model} if model else {})
+    options = ({"scale": scale, "content": content} | ({"model": model} if model else {})
+               | ({"engine": config.VIDEO_ENGINE} if config.VIDEO_ENGINE != "auto" else {}))
     drawn = is_anime(prof, content)
     log(f"   plan: {rec.plan}")
     if not cands:

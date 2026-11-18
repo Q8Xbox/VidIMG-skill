@@ -28,6 +28,47 @@ from .. import media
 ROOT = config.TOOLS_DIR / "free-models"
 PYTHON = config.TOOLS_DIR / "sr-venv" / "Scripts" / "python.exe"
 RUNNER = Path(__file__).resolve().parents[1] / "sr_runner.py"
+MLRT_RUNNER = Path(__file__).resolve().parents[1] / "mlrt_runner.py"
+ENGINE_CHOICES = ("auto", "torch", "mlrt")
+
+
+def _torch_cuda() -> bool:
+    """Does the PyTorch model environment see a CUDA GPU? (asked once per process)"""
+    global _CUDA
+    if _CUDA is None:
+        try:
+            r = subprocess.run([str(PYTHON), "-I", "-c", "import torch; print(torch.cuda.is_available())"],
+                               capture_output=True, text=True, timeout=120)
+            _CUDA = r.returncode == 0 and r.stdout.strip().endswith("True")
+        except (OSError, subprocess.TimeoutExpired):
+            _CUDA = False
+    return _CUDA
+
+
+_CUDA: bool | None = None
+
+
+def video_engine(model: str, preference: str | None = None) -> tuple[str | None, str]:
+    """Which engine runs this video model: ('torch' | 'mlrt' | None, reason).
+
+    torch = PyTorch CUDA (tools/sr-venv); mlrt = vs-mlrt, ONNX Runtime DirectML inside VidIMG's VapourSynth
+    (any DirectX 12 GPU). 'auto' keeps PyTorch where CUDA works and uses vs-mlrt otherwise (AMD / Intel
+    GPUs, or no CUDA build). Only models with an ONNX conversion can use vs-mlrt."""
+    from .. import mlrt_install
+    pref = (preference or config.VIDEO_ENGINE or "auto").lower()
+    if pref not in ENGINE_CHOICES:
+        return None, f"unknown engine {pref!r}; choose one of {', '.join(ENGINE_CHOICES)}"
+    m_ok, m_why = mlrt_install.available(model)
+    if pref == "mlrt":
+        return ("mlrt", "requested") if m_ok else (None, m_why)
+    t_ok = PYTHON.exists() and model_file(model).exists()
+    if pref == "torch":
+        return ("torch", "requested") if t_ok else (None, "PyTorch model environment or weights missing: run python -m vidimg.free_install")
+    if t_ok and _torch_cuda():
+        return "torch", "auto: PyTorch CUDA"
+    if m_ok:
+        return "mlrt", "auto: no CUDA GPU for PyTorch, ONNX Runtime DirectML instead"
+    return ("torch", "auto: PyTorch (no CUDA GPU and no vs-mlrt: slow CPU)") if t_ok else (None, m_why)
 
 
 def manifest() -> dict:
@@ -110,6 +151,7 @@ class FreeSR:
     width: int | None = None
     scale: float | None = None
     label: str = ""
+    engine: str = ""          # "" = config.VIDEO_ENGINE (auto / torch / mlrt)
 
     def out_size(self, w: int, h: int) -> tuple[int, int]:
         if self.height and not self.width:
@@ -133,10 +175,14 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
         on_progress: Callable[[int, int], None] | None = None, timeout: float | None = None,
         start: float | None = None, duration: float | None = None, expected_frames: int | None = None,
         audio: bool = True, post_vf: str | None = None, colour: dict | None = None, **_) -> AdapterResult:
-    ok, why = available()
-    if not ok:
-        return AdapterResult(False, error=why)
     st = next(s for s in stages if isinstance(s, FreeSR))
+    engine, why = video_engine(st.model, st.engine or None)
+    if engine is None:
+        return AdapterResult(False, error=why)
+    if engine == "torch":
+        ok, why = available()
+        if not ok:
+            return AdapterResult(False, error=why)
     src, dst = Path(src), Path(dst)
     safe_output_dir(dst.parent, src)
     info = media.probe(src, exact=start is None and duration is None)
@@ -148,11 +194,23 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
     colour = colour if colour is not None else (media.colour_hint(src) or
                                                 {k: info.get(k) for k in ("color_primaries", "color_transfer") if info.get(k)})
     full = colour.get("color_range") in ("pc", "jpeg") or str(info.get("pix_fmt", "")).startswith("yuvj")
-    spec = {"model": str(model_file(st.model)), "width": w, "height": h, "out_width": ow, "out_height": oh}
-    if not manifest()[st.model]["training"].endswith("compact") and w * h > 300_000:
-        # heavy (RRDB/Swin) models on whole HD frames overflow VRAM and Windows silently falls back to
-        # system memory (observed: 16 min stuck on 150 frames at 720p): tile them, one frame at a time
-        spec.update(tile=384, batch=1)
+    heavy = not manifest()[st.model]["training"].endswith("compact")
+    if engine == "mlrt":
+        from .. import mlrt_install
+        from . import vapoursynth as _vs
+        spec = {"onnx": str(mlrt_install.onnx_path(st.model)), "width": w, "height": h, "out_width": ow,
+                "out_height": oh, "frames": expected or info["frames"], "plugins": str(_vs.PLUGINS),
+                "vsmlrt_dir": str(mlrt_install.ROOT), "backend": "dml", "fp16": True, "streams": 1,
+                # whole SD frames fit (tested 720x576 x4); larger heavy-model frames run in tiles
+                "tile": 512 if heavy and w * h > 450_000 else 0}
+        worker_cmd = [str(mlrt_install.VS_PY), "-I", str(MLRT_RUNNER)]
+    else:
+        spec = {"model": str(model_file(st.model)), "width": w, "height": h, "out_width": ow, "out_height": oh}
+        if heavy and w * h > 300_000:
+            # heavy (RRDB/Swin) models on whole HD frames overflow VRAM and Windows silently falls back to
+            # system memory (observed: 16 min stuck on 150 frames at 720p): tile them, one frame at a time
+            spec.update(tile=384, batch=1)
+        worker_cmd = [str(PYTHON), "-I", str(RUNNER), "video"]
     sp = dst.parent / f".{dst.stem}.spec.json"
     sp.write_text(json.dumps(spec), encoding="utf-8")
     ff = shutil.which("ffmpeg")
@@ -169,8 +227,7 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
     worker_log = dst.parent / f".{dst.stem}.worker.log"
     wlog = open(worker_log, "wb")
-    worker = subprocess.Popen([str(PYTHON), "-I", str(RUNNER), "video", str(sp)], stdin=dec.stdout,
-                              stdout=subprocess.PIPE, stderr=wlog)
+    worker = subprocess.Popen([*worker_cmd, str(sp)], stdin=dec.stdout, stdout=subprocess.PIPE, stderr=wlog)
     dec.stdout.close()
     # HD output gets BT.709 (SD->HD matrix conversion, Doom9: convert 601->709 when SD becomes HD)
     hd = oh >= 720
@@ -186,7 +243,7 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
                 "-r", rate, "-i", "pipe:0", *seek, "-i", str(src), "-map", "0:v:0",
                 *(["-map", "1:a?", "-c:a", "copy"] if audio else ["-an"]), "-vf", vf,
                 *media.encoder_args(encoder), *tags, "-map_metadata", "1",
-                "-metadata", f"comment=Restored with VidIMG (free engine): {st.describe()}"]
+                "-metadata", f"comment=Restored with VidIMG (free engine, {engine}): {st.describe()}"]
     if dst.suffix.lower() in (".mp4", ".mov", ".m4v"):
         enc_args += ["-movflags", "+write_colr+faststart"]
     frame_re = re.compile(r"frame=\s*(\d+)")
@@ -205,7 +262,8 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
         werr = worker_log.read_text(encoding="utf-8", errors="replace").strip().splitlines()
         return AdapterResult(False, error=(werr[-1] if werr else None) or f"encoder exit {r.returncode}", run=r)
     out = media.probe(dst, exact=True)
-    details = {"input": info, "output": out, "expected_frames": expected, "stage": st.describe()}
+    details = {"input": info, "output": out, "expected_frames": expected, "stage": st.describe(), "engine": engine,
+               "engine_reason": why}
     if expected and abs(out["frames"] - expected) > max(2, expected * 0.002):
         return AdapterResult(False, [dst], error=f"frame count {out['frames']} != expected {expected}", run=r, details=details)
     if audio and info["audio_streams"] and not out["audio_streams"]:

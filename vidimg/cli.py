@@ -56,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
                      help="anime/cartoon or real footage; auto trusts the probe (conservative: real unless sure)")
     rvv.add_argument("--model", default=None, choices=config.VIDEO_MODEL_CHOICES,
                      help="use only this model (default: the approved order, first that passes the guard)")
+    rvv.add_argument("--engine", default=None, choices=config.VIDEO_ENGINE_CHOICES,
+                     help="engine for RealESRNet/BSRNet/general-v3: auto (PyTorch where CUDA works, else vs-mlrt), "
+                          "torch, or mlrt (ONNX Runtime DirectML, any DirectX 12 GPU)")
 
     rs = sub.add_parser("restore-series",
                         help="restore numbered episodes of one folder into ONE folder + one series comparison report")
@@ -67,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     rs.add_argument("--content", default="auto", choices=["auto", "anime", "real"])
     rs.add_argument("--model", default=None, choices=config.VIDEO_MODEL_CHOICES)
     rs.add_argument("--encoder", default="hevc10", choices=sorted(media.ENCODERS))
+    rs.add_argument("--engine", default=None, choices=config.VIDEO_ENGINE_CHOICES)
     rs.add_argument("--report-only", action="store_true", help="only rebuild the series report of OUT")
 
     an = sub.add_parser("analyze", help="measured degradation profile of an image or video")
@@ -108,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     cv.add_argument("--max-videos", type=int)
 
     a = ap.parse_args(argv)
+    if getattr(a, "engine", None):
+        config.VIDEO_ENGINE = a.engine
 
     if a.cmd == "restore-video":
         from datetime import datetime

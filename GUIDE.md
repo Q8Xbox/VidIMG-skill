@@ -13,7 +13,7 @@ A calibrated "guard" checks every result before it is delivered. Anything the gu
 | Item | Minimum | Recommended | Note |
 |---|---|---|---|
 | Operating system | Windows 10/11, 64-bit | Windows 11 | Background jobs currently rely on Windows interfaces |
-| Graphics card | NVIDIA with 6 GB of memory and a driver that supports CUDA 13 | RTX with 12–16 GB of memory | Without one, the tool runs on the processor, but very slowly |
+| Graphics card | NVIDIA with 6 GB of memory and a driver that supports CUDA 13 | RTX with 12–16 GB of memory | AMD and Intel cards (DirectX 12) run the faithful video models through vs-mlrt. Without a graphics card the tool runs on the processor, but very slowly |
 | Memory (RAM) | 16 GB | 32–64 GB | |
 | Space for programs | 10 GB | — | About 5 GB of downloads, installed inside the tool's own folder |
 | Space for results | 20 GB | 100 GB or more on a large drive | One hour of 1080p video needs about 6 GB while it is being processed |
@@ -38,6 +38,7 @@ system-wide except FFmpeg, and only after you agree.
 | YuNet and SFace face models | 38 MB | OpenCV Zoo | `tools/face-models` | Used by the guard to check that faces keep their identity |
 | Video2X 6.4.0 | 188 MB | GitHub (k4yt3x) | `tools/video2x-6.4.0` | Cartoons and animation, and frame generation on request |
 | Portable VapourSynth R72 with its plugins | About 220 MB | PyPI and vsrepo | `tools/vs-venv` | Deinterlacing (QTGMC) and inverse telecine (IVTC) |
+| vs-mlrt v15.16 (ONNX Runtime + DirectML) and ONNX copies of the open models | About 60 MB download, plus 35 MB of ONNX tools and 130 MB of converted models | GitHub (AmusementClub/vs-mlrt), PyPI | `tools/vs-mlrt` | Second engine for RealESRNet, BSRNet and general-v3 on any DirectX 12 graphics card. The models are not downloaded: they are converted from the official weights above and checked against PyTorch |
 | FFmpeg (full build) | About 200 MB | `winget install Gyan.FFmpeg` | The system, **after asking you** | Encoding, analysis and VMAF |
 | Your local settings | — | — | `vidimg.local.json` in the VidIMG folder (and `.mcp.json` for the cloned copy) | Saves the results folder you chose and the Python path on your computer |
 
@@ -270,6 +271,15 @@ That model is then the only candidate; if the guard rejects it, the original sta
 
 ```bash
 python -m vidimg restore-video "D:/Videos/episode.mp4" --content anime --scale 2 --model cugan-pro
+```
+
+**Which engine runs the models.** RealESRNet, BSRNet and general-v3 can run on two engines. On an NVIDIA card VidIMG
+uses PyTorch CUDA, as before. On AMD or Intel cards, or wherever PyTorch finds no CUDA, it uses vs-mlrt (ONNX Runtime
+with DirectML) inside VidIMG's own VapourSynth. Both engines go through the same guarded previews and final checks. To
+pick one yourself, add `--engine torch` or `--engine mlrt`.
+
+```bash
+python -m vidimg restore-video "D:/Videos/wedding.avi" --content real --engine mlrt
 ```
 
 To do a whole series (or part of one) in one go, point `restore-series` at the folder. The episode number is

@@ -21,7 +21,7 @@ Verified on the reference machine on 2026-11-16.
 | Item | Minimum | Recommended (reference machine) | Why |
 |---|---|---|---|
 | OS | Windows 10/11 x64 | Windows 11 Pro 24H2+ | Background jobs use Windows APIs today |
-| GPU | NVIDIA, 6 GB VRAM, CUDA 13 driver | RTX 5060 Ti 16 GB (driver 621.24) | PyTorch CUDA models; NVENC HEVC 10-bit encoding. Without NVIDIA: CPU fallback works but is very slow; encoding falls back to x265 |
+| GPU | NVIDIA, 6 GB VRAM, CUDA 13 driver | RTX 5060 Ti 16 GB (driver 621.24) | PyTorch CUDA models; NVENC HEVC 10-bit encoding. Without NVIDIA: the faithful video models run on AMD/Intel GPUs through vs-mlrt (ONNX Runtime DirectML, `--engine mlrt`); otherwise CPU fallback works but is very slow; encoding falls back to x265 |
 | CPU | 4 cores | i9-12900K (24 threads) | ffmpeg decode/encode, QTGMC, guard |
 | RAM | 16 GB | 64 GB | Video pipelines and 16-bit photos |
 | Disk (software) | ~5 GB | — | sr-venv 3.3 GB, models 0.4 GB, Video2X 0.5 GB, vs-venv 0.2 GB, AviSynth plugins 0.1 GB |
