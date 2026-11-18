@@ -34,7 +34,7 @@ VIDEO_EXT = {".mkv", ".mp4", ".avi", ".mov", ".m4v", ".ts", ".m2ts", ".wmv", ".w
 _PATTERNS = (
     r"[Ss]\d{1,2}\s*[Ee](\d{1,3})(?!\d)",                              # S01E05
     r"(?:^|[\s._\-\[(])(?:[Ee][Pp]|Episode)\s*\.?\s*(\d{1,3})(?!\d)",  # Ep05, EP 5, Episode 5
-    r"\s-\s(\d{1,3})(?=[\s.\[(v]|$)",                                  # Title - 05 [WEB-DL]
+    r"\s-\s(\d{1,3})(?=[\s.\[(v]|$)",                                  # Title - 05 [tags]
 )
 
 

@@ -10,9 +10,9 @@ from vidimg.report import series_report as sr
 
 
 @pytest.mark.parametrize("name,n", [
-    ("[Group] Animal Tales - 01 [WEB-DL][576p][BD24E3DC].mkv", 1),
-    ("[Group] Animal Tales - 26 [WEB-DL][576p][1619CF5A].mkv", 26),
-    ("The Knight Show S01E05 1080p AMZN WEBRip x264.mkv", 5),
+    ("[Group] Show Name - 01 [576p][A1B2C3D4].mkv", 1),
+    ("[Group] Show Name - 26 [576p][0F0F0F0F].mkv", 26),
+    ("Home Movies S01E05 1080p x264.mkv", 5),
     ("show.s02e112.720p.mkv", 112),
     ("My Show Ep 07.mp4", 7),
     ("My Show EP12 (1991).mkv", 12),
@@ -53,9 +53,9 @@ def test_find_episodes_and_default_folder(tmp_path):
 
 
 def test_series_title_and_times():
-    names = ["[Group] Animal Tales - 01 [WEB-DL].mkv", "[Group] Animal Tales - 02 [WEB-DL].mkv"]
-    assert sr.series_title(names) == "Animal Tales"
-    assert sr.series_title(["Knight.Show.S01E01.mkv", "Knight.Show.S01E02.mkv"]) == "Knight Show"
+    names = ["[Group] Show Name - 01 [576p].mkv", "[Group] Show Name - 02 [576p].mkv"]
+    assert sr.series_title(names) == "Show Name"
+    assert sr.series_title(["Family.Trip.S01E01.mkv", "Family.Trip.S01E02.mkv"]) == "Family Trip"
     t = sr.default_times(1440)
     assert len(t) == 10 and t[0] == 72 and t[-1] == int(1440 * 0.9) and t == sorted(t)
 

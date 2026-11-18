@@ -148,7 +148,7 @@ def _plan_candidates(p: probe.VideoProfile, scale: float | None, content: str,
             ("free general-v3", lambda: [free_sr.FreeSR(model="general_x4v3", height=h_out)])]
         if all_models:
             # Real-CUGAN pro: closer line weight and the only anime model that passed the face check on the
-            # Prince Valiant (1991) clips (identity 0.799 vs 0.687 for anime-v3); available on request only
+            # clips of a 1991 cartoon with realistic faces (identity 0.799 vs 0.687 for anime-v3); on request only
             cands.append(("anime cugan-pro", lambda: [video2x.AnimeSR("realcugan", "models-pro", k)]))
         return why + ", general-v3 third", cands
     h = out_h or p.height
