@@ -1,7 +1,7 @@
 """Run VidIMG from any folder (the Claude Code plugin calls it by its full path):
 
     python vidimg_run.py setup [--output DIR] [--yes] [--check]   # install / repair / verify
-    python vidimg_run.py doctor | analyze ... | restore ... | restore-video ...   # the vidimg CLI
+    python vidimg_run.py doctor | analyze ... | restore ... | restore-video ... | restore-series ...   # the vidimg CLI
 """
 
 import sys
