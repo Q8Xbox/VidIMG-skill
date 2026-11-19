@@ -119,7 +119,9 @@ MODEL_CHOICES = config.VIDEO_MODEL_CHOICES
 
 
 def plan_candidates(p: probe.VideoProfile, scale: float | None = None, content: str = "auto",
-                    model: str | None = None) -> tuple[str, list[tuple[str, Callable[[], list]]]]:
+                    model: str | None = None, strict: bool = True) -> tuple[str, list[tuple[str, Callable[[], list]]]]:
+    """strict: the named model is the only candidate (a person insisted on it). Not strict: it goes first and the
+    approved order follows if the guard rejects it (Claude's pick from the analysis, model_guide)."""
     why, cands = _plan_candidates(p, scale, content, model is not None)
     if model is None:
         return why, cands
@@ -127,8 +129,108 @@ def plan_candidates(p: probe.VideoProfile, scale: float | None = None, content: 
         raise ValueError(f"model must be one of {MODEL_CHOICES}")
     picked = [c for c in cands if c[0].split(" ", 1)[1] == model]
     if not picked:
-        return f"{why}; requested model {model} does not apply to this content", []
-    return f"{why}; only {model} (requested)", picked
+        if strict:
+            return f"{why}; requested model {model} does not apply to this content", []
+        return f"{why}; chosen model {model} does not apply to this content: approved order instead", \
+            [c for c in cands if c[0] != "anime cugan-pro"]
+    if strict:
+        return f"{why}; only {model} (requested)", picked
+    rest = [c for c in cands if c is not picked[0] and c[0] != "anime cugan-pro"]
+    return f"{why}; {model} first (chosen from the analysis), then the approved order", picked + rest
+
+
+# Measured facts per model, for model_guide (Claude chooses from these and the frames sheet). Numbers: cartoon
+# ground truth (PLAN.md 3.7), the person's 12 real segments (identity / VMAF), the owner's cartoon samples.
+MODEL_FACTS = {
+    "esrgan-v3": {"for": "anime", "speed": "fast (Video2X, GPU)",
+                  "good": "cleanest line art on cartoons; all owner cartoon samples delivered with it (VMAF 94-98)",
+                  "weak": "drawn realistic faces drift (identity 0.687 on a 1991 cartoon); smooths painted texture "
+                          "(texture return puts it back)"},
+    "cugan": {"for": "anime", "speed": "fast (Video2X, GPU)",
+              "good": "Real-CUGAN without denoise: similar to anime-v3, a little softer lines, keeps more of the source's "
+                      "look",
+              "weak": "cartoon ground truth VMAF 78.2 vs 79.3 for anime-v3"},
+    "cugan-pro": {"for": "anime", "speed": "fast (Video2X, GPU)",
+                  "good": "line weight closest to the source; the only anime model that kept realistic drawn faces "
+                          "(identity 0.799 vs 0.687)",
+                  "weak": "less clean than anime-v3 on rough sources"},
+    "general-v3": {"for": "both", "speed": "about 7.8 fps at 720p",
+                   "good": "fast; highest VMAF on cartoon ground truth (82.4) and real segments (89.4); fine without "
+                           "faces and for long videos",
+                   "weak": "sharper but reshapes real faces more (identity 0.861)"},
+    "realesrnet": {"for": "real", "speed": "slow (about 433k input pixels/s)",
+                   "good": "most faithful on real faces (identity 0.880, VMAF 84.5); no invented texture",
+                   "weak": "softer look; slow on long or large videos"},
+    "bsrnet": {"for": "real", "speed": "slow (about 433k input pixels/s)",
+               "good": "as faithful as RealESRNet on faces (0.879); the most faithful photo model on the person's "
+                       "ground truth",
+               "weak": "slightly lower VMAF (82.0); slow"},
+}
+
+
+def _suggest(p: probe.VideoProfile, anime: bool, slow_h: float, fast_h: float) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    if anime:
+        pick = "esrgan-v3"
+        reasons.append("cartoon/anime: anime-v3 gave the cleanest line art on every owner sample")
+        if p.faces_max:
+            reasons.append("faces were detected: if the frames sheet shows REALISTIC drawn faces (not stylised), "
+                           "choose cugan-pro instead (it kept them: identity 0.799 vs 0.687)")
+    elif p.faces_max and slow_h <= FREE_NONGAN_MAX_HOURS:
+        pick = "realesrnet"
+        reasons.append(f"real faces and the faithful model fits the time budget (about {slow_h:.1f} h): RealESRNet "
+                       "keeps identity best")
+        if p.face_min_height and p.face_min_height < 24:
+            reasons.append("faces are tiny (< 24 px): no model can restore them reliably; the guard keeps the original "
+                           "look there")
+    elif slow_h > FREE_NONGAN_MAX_HOURS:
+        pick = "general-v3"
+        reasons.append(f"the faithful models would need about {slow_h:.0f} h; general-v3 takes about {fast_h:.1f} h")
+        if p.faces_max:
+            reasons.append("it reshapes faces a little more (identity 0.861); choose realesrnet only if the person "
+                           "accepts the long run")
+    else:
+        pick = "realesrnet"
+        reasons.append("real footage without faces, short enough for the faithful model; general-v3 is the sharper, "
+                       "faster alternative when the person prefers that look")
+    if p.noise_sigma > 2:
+        reasons.append(f"noisy source (sigma {p.noise_sigma:.1f}): SCUNet is not used on video; the models clean it, and "
+                       "texture return puts the source's texture back")
+    return pick, reasons
+
+
+def model_guide(p: probe.VideoProfile, scale: float | None = None, content: str = "auto") -> dict:
+    """What Claude needs to choose the model for THIS video: the signals that matter, each model's measured strengths
+    and weaknesses with its estimated run time here, and a suggested pick with the reasons. Claude confirms the
+    content from the frames sheet (drawn vs real, realistic drawn faces) and may choose differently."""
+    anime = is_anime(p, content)
+    frames = (p.frames or round(p.duration * (p.fps or 30))) * (2 if "interlaced" in p.flags else 1)
+    slow_h = frames * p.width * p.height / FREE_NONGAN_PIXELS_PER_S / 3600
+    fast_h = frames * p.width * p.height / (FREE_NONGAN_PIXELS_PER_S * 18) / 3600     # general-v3 ~18x faster
+    hours = {"realesrnet": slow_h, "bsrnet": slow_h, "general-v3": fast_h}
+    reading = "anime/cartoon" if anime else "real footage"
+    # the probe misreads both ways (an owner's cartoon read as real, a real clip as anime): the sheet decides
+    signals = {"content": reading if content != "auto" else f"{reading} (probe only; confirm on the frames sheet)",
+               "size": f"{p.width}x{p.height} @ {p.fps:g} fps, {p.duration / 60:.1f} min",
+               "faces": (f"up to {p.faces_max} per frame, smallest {p.face_min_height} px" if p.faces_max else "none seen"),
+               "noise_sigma": p.noise_sigma, "compressed": "compressed" in p.flags,
+               "flags": p.flags}
+    models = []
+    for name, f in MODEL_FACTS.items():
+        applies = f["for"] == "both" or (f["for"] == "anime") == anime
+        m = {"model": name, "applies": applies, **{k: f[k] for k in ("speed", "good", "weak")}}
+        if name in hours:
+            m["est_hours"] = round(hours[name], 2)
+        models.append(m)
+    pick, reasons = _suggest(p, anime, slow_h, fast_h)
+    other = {}
+    if content == "auto":       # the probe often misreads old cartoons: give both, Claude decides from the sheet
+        other = {"suggested_if_anime": _suggest(p, True, slow_h, fast_h)[0],
+                 "suggested_if_real": _suggest(p, False, slow_h, fast_h)[0]}
+    return {"signals": signals, "models": models, "suggested": pick, "why": reasons, **other,
+            "how": "Choose the model yourself from these facts and the frames sheet, tell the person which and why, "
+                   "and pass it as restore_video(model=...). It goes first; if the guard rejects it on the previews the "
+                   "approved order follows. model_strict=True only when the person insists on one model."}
 
 
 def _plan_candidates(p: probe.VideoProfile, scale: float | None, content: str,
@@ -648,7 +750,7 @@ def _cut(src: Path, start: float, seconds: float, dst: Path) -> None:
 def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encoder: str = "hevc10",
                   on_progress: Callable[[int, int], None] | None = None, log=print,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
-                  mask_tape_noise: bool = False) -> VideoRecord:
+                  mask_tape_noise: bool = False, model_strict: bool = True) -> VideoRecord:
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
     work = out_dir / "work" / src.stem
@@ -667,8 +769,9 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
         if choice_file.exists():
             choice_file.unlink()               # a different file under the same name: choose again
     rec = VideoRecord(str(src), prof.to_dict(), "")
-    rec.plan, cands = plan_candidates(prof, scale, content, model)
+    rec.plan, cands = plan_candidates(prof, scale, content, model, strict=model_strict)
     options = ({"scale": scale, "content": content} | ({"model": model} if model else {})
+               | ({"model_first": True} if model and not model_strict else {})
                | ({"engine": config.VIDEO_ENGINE} if config.VIDEO_ENGINE != "auto" else {})
                | ({"mask_tape_noise": True} if mask_tape_noise else {}))
     drawn = is_anime(prof, content)
