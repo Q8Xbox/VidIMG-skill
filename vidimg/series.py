@@ -215,7 +215,9 @@ def restore_series(src_dir: Path, out: Path | None = None, wanted: set[int] | No
             continue
         if st.get("source") and st["source"] != str(src):
             st = {}                                       # a different file now carries this number
-        if st.get("source") and "delivered" in st and not st["delivered"] and not st.get("error"):
+        # a run that broke (engine error) is tried again; only a guard decision keeps the original for good
+        broke = any(str(x).startswith("full run failed") for x in st.get("notes", []))
+        if st.get("source") and "delivered" in st and not st["delivered"] and not st.get("error") and not broke:
             log(f"ep {key}: not delivered last time (the guard kept the original); "
                 f"remove its entry from batch_status.json to try again")
             continue

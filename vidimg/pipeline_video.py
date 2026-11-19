@@ -873,7 +873,9 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     model_out, model_enc = dst, encoder
     if strength > 0:
         model_enc = "lossless" if _room_for_lossless(work, prof, base) else encoder
-        model_out = work / f"model_out{dst.suffix if dst.suffix == '.mkv' else '.mp4'}"
+        # always Matroska: a full episode's lossless stream (32 GB) broke Video2X's MP4 writer at the very end
+        # (error -22 while closing the file, header unreadable, 52 minutes lost); short clips never showed it
+        model_out = work / "model_out.mkv"
         if model_enc != "lossless":
             rec.notes.append("not enough free disk space for a lossless intermediate: texture returned from the "
                              "normal encode (a little less texture kept)")
