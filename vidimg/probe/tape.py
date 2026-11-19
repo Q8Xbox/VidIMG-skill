@@ -42,7 +42,12 @@ TOP_ZONE = 0.05             # flagging: the top 5 % of the frame
 FLAG_PX = 3.0               # px of accumulated displacement at the top edge, beyond every control band's
 FLAG_SIGN = 0.7             # share of the row steps that move the same way (the bend grows steadily)
 FLAG_CONTROLS = 5           # control bands spread over 20-80 % of the height
-FLAG_SHARE = 0.3            # ... in at least this share of frames
+FLAG_GROWTH = 1.5           # steps in the top third of the zone at least this many times those in the bottom third (+0.3 px)
+FLAG_STRAIGHT = 1.0         # px per step: the bottom of the zone and the rows just below it are (nearly) straight
+# (an owner cartoon's diagonal curtain and staircase near the top moved a steady 1 and 5 px per step: no growth, and
+# the diagonal went on below the zone; the middle control bands could not see it, the old rule flagged 50 % of frames)
+FLAG_SHARE = 0.2            # ... in at least this share of frames (real clips 0-6 % after the growth rule; synthetic
+                            # flagging with a strength swinging 0-10 px 25-38 %)
 CLIP_LEVEL = 253            # 8-bit luma of a clipped superwhite
 CLIP_SHARE = 0.002          # share of pixels at it (0.2 %), in at least CLIP_FRAMES of the frames
 CLIP_FRAMES = 0.1           # (bright areas come and go with the scenes; every clean clip measured 0 frames)
@@ -157,6 +162,14 @@ def top_bend(y: np.ndarray) -> float:
     moved = [s for s in steps if abs(s) >= 0.25]          # whole-pixel bends leave many rows unmoved
     if len(moved) < 3 or sum(1 for s in moved if s * top > 0) / len(moved) < FLAG_SIGN:
         return 0.0
+    # a bend GROWS towards the top edge from straight rows; a diagonal in the picture moves the same at every row
+    k = max(1, len(steps) // 3)
+    low, high = float(np.mean(np.abs(steps[:k]))), float(np.mean(np.abs(steps[-k:])))
+    if low >= FLAG_STRAIGHT or high < FLAG_GROWTH * low + 0.3:
+        return 0.0
+    below = row_steps(y, 2 * n + 1, n + 1)
+    if below and float(np.mean(np.abs(below))) >= FLAG_STRAIGHT:
+        return 0.0
     span = n - first
     control = 0.0
     for k in range(FLAG_CONTROLS):
@@ -168,6 +181,8 @@ def top_bend(y: np.ndarray) -> float:
 def read_luma(src: Path, times: list[float]) -> list[np.ndarray]:
     info = media.probe(src)
     w, h = info["width"], info["height"]
+    if not (w and h):
+        return []
     out = []
     for t in times:
         raw = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{t:.3f}",

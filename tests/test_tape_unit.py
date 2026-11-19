@@ -54,6 +54,11 @@ def test_flagging_needs_a_bend_that_grows_towards_the_top():
     assert tape.top_bend(y) < tape.FLAG_PX
     sheared = np.stack([np.roll(row, r // 6) for r, row in enumerate(y)])   # a diagonal everywhere, not a bend
     assert tape.top_bend(sheared) < tape.FLAG_PX
+    for step in (1, 5):          # a diagonal only near the top (an owner cartoon's curtain / staircase): not a bend
+        local = y.copy()
+        for r in range(60):
+            local[r] = np.roll(y[r], (60 - r) * step // 2)
+        assert tape.top_bend(local) < tape.FLAG_PX
 
 
 def test_only_solid_superwhite_patches_count_as_clipped():
