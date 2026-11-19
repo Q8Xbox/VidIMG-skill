@@ -107,6 +107,7 @@ class AnimeSR:
 
 
 ENCODER_TO_CODEC = {"ffv1": ("ffv1", None, {}),
+                    "lossless": ("libx264", "yuv420p10le", {"qp": "0", "preset": "ultrafast"}),
                     "hevc10": ("libx265", "yuv420p10le", {"crf": "16", "preset": "slow", "x265-params": "bframes=0"}),
                     "h264": ("libx264", "yuv420p", {"crf": "16", "bf": "0"}), "prores": ("prores_ks", "yuv422p10le", {})}
 
@@ -115,6 +116,7 @@ ENCODER_TO_CODEC = {"ffv1": ("ffv1", None, {}),
 # 120-frame 576p clip, and the CPU stays free for a 4K run); libx265/libx264 without an NVIDIA GPU
 # bf=0: no B-frames, so packet order = display order and broken timestamps can be re-stamped without re-encoding
 NVENC_CODEC = {"hevc10": ("hevc_nvenc", "p010le", {"preset": "p7", "tune": "hq", "rc": "constqp", "qp": "16"}),
+               "lossless": ("hevc_nvenc", "p010le", {"preset": "p4", "tune": "lossless"}),
                "h264": ("h264_nvenc", "yuv420p", {"preset": "p7", "tune": "hq", "rc": "constqp", "qp": "16"})}
 
 

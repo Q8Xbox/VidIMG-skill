@@ -26,6 +26,7 @@ from .adapters import free_sr, video2x
 from .adapters import vapoursynth as vsb
 from . import media
 from .adapters import AdapterResult, safe_output_dir
+from . import texture as texture_pass
 from .guard.video import _ffmpeg, _frames_by_index, verify_chroma, verify_deblend, verify_mask, verify_video
 from .probe import blend as blend_probe
 from .probe import chroma as chroma_probe
@@ -773,6 +774,7 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
     options = ({"scale": scale, "content": content} | ({"model": model} if model else {})
                | ({"model_first": True} if model and not model_strict else {})
                | ({"engine": config.VIDEO_ENGINE} if config.VIDEO_ENGINE != "auto" else {})
+               | ({"texture": config.TEXTURE_STRENGTH} if config.TEXTURE_STRENGTH != 1.0 else {})
                | ({"mask_tape_noise": True} if mask_tape_noise else {}))
     drawn = is_anime(prof, content)
     log(f"   plan: {rec.plan}")
@@ -865,15 +867,44 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     chosen = (rec.chosen, make)
     ref_vf = None
     dst = out_dir / f"{src.stem}_restored{output_suffix(src)}"
-    log(f"   full run with {rec.chosen} -> {dst.name}")
+    strength = config.TEXTURE_STRENGTH
+    # texture return: the model writes a lossless intermediate (an NVENC QP 16 one lost a third of what the pass
+    # gives back: flat area 0.28 vs 0.19 lossless, source 0.18), the pass writes the deliverable
+    model_out, model_enc = dst, encoder
+    if strength > 0:
+        model_enc = "lossless" if _room_for_lossless(work, prof, base) else encoder
+        model_out = work / f"model_out{dst.suffix if dst.suffix == '.mkv' else '.mp4'}"
+        if model_enc != "lossless":
+            rec.notes.append("not enough free disk space for a lossless intermediate: texture returned from the "
+                             "normal encode (a little less texture kept)")
+    log(f"   full run with {rec.chosen} -> {dst.name}" + (f" (then source texture returned, strength {strength:g})"
+                                                         if strength > 0 else ""))
     if prof.duration > LONG_VIDEO_SECONDS and not any(isinstance(s, video2x.AnimeSR) for s in make()):
         log(f"   long video ({prof.duration / 60:.0f} min): {len(chunk_plan(prof.duration))} resumable chunks")
-        r = run_chunked(base, dst, chosen[1], encoder, work, on_progress=on_progress, log=log)
+        r = run_chunked(base, model_out, chosen[1], model_enc, work, on_progress=on_progress, log=log)
     else:
-        r = run_engine(base, dst, chosen[1](), encoder, on_progress=on_progress)
+        r = run_engine(base, model_out, chosen[1](), model_enc, on_progress=on_progress)
     if not r.ok:
         rec.notes.append(f"full run failed: {r.error}")
         return rec
+    if strength > 0:
+        final_enc = "hevc10-grain" if encoder == "hevc10" else encoder
+        log(f"   returning source texture (strength {strength:g}, final encode {final_enc})")
+        t = texture_pass.apply(base, model_out, dst, strength, final_enc)
+        if t.ok:
+            rec.notes.append(f"source texture returned between the lines (strength {strength:g}); final encode "
+                             f"{final_enc}")
+            media.fix_av_offset(base, dst)
+            model_out.unlink(missing_ok=True)
+        else:
+            rec.notes.append(f"texture return failed ({t.error}): delivered without it")
+            cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(model_out),
+                                 "-map", "0", "-c:a", "copy", *media.encoder_args(encoder), "-map_metadata", "0",
+                                 str(dst)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            if cp.returncode != 0 or not dst.exists():
+                rec.notes.append("full run failed: could not write the deliverable from the model output")
+                return rec
+            model_out.unlink(missing_ok=True)
     side = carry_side_streams(src, dst)
     if side:
         rec.notes.append(side)
@@ -891,6 +922,20 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     rec.sheets = [str(p) for p in review_frames(base, dst, out_dir / "sheets")]
     (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
     return rec
+
+
+def _room_for_lossless(work: Path, prof: probe.VideoProfile, base: Path) -> bool:
+    """A lossless intermediate needs about 0.3 bytes per output pixel (measured 0.23 at 1440x1152); ask for twice
+    that, plus room for the deliverable."""
+    import shutil
+    info = media.probe(base)
+    frames = info["frames"] or round(prof.duration * (prof.fps or 25))
+    out_px = (info["width"] or prof.width) * (info["height"] or prof.height) * 4     # x2 typical; x4 pixels
+    need = frames * out_px * 0.3 * 2
+    try:
+        return shutil.disk_usage(work).free > need
+    except OSError:
+        return False
 
 
 def frames_sheet(src: Path, dst: Path, n: int = 6) -> Path | None:

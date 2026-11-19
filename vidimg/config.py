@@ -92,6 +92,10 @@ VIDEO_MODEL_CHOICES = ("esrgan-v3", "cugan", "cugan-pro", "general-v3", "realesr
 # vs-mlrt (ONNX Runtime DirectML: AMD / Intel GPUs); torch / mlrt force one. CLI --engine sets it per run.
 VIDEO_ENGINE_CHOICES = ("auto", "torch", "mlrt")
 VIDEO_ENGINE = os.environ.get("VIDIMG_VIDEO_ENGINE", "auto")
+# Texture return after the model (vidimg/texture.py): how much of the source's own texture between the lines is put
+# back (0 = off, 1 = all the model removed). Every model flattens painted backgrounds and grain ("denoised to death",
+# Doom9); at 1 the flat area came back to the source's level with the lines kept sharp.
+TEXTURE_STRENGTH = float(os.environ.get("VIDIMG_TEXTURE", "1.0"))
 
 # Video2X processors that must never touch real human faces (benchmark: identity 0.77-0.81).
 VIDEO2X_ANIME_ONLY = frozenset({"realesrgan", "realcugan", "libplacebo"})
