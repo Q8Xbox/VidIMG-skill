@@ -27,7 +27,7 @@ from .adapters import vapoursynth as vsb
 from . import media
 from .adapters import AdapterResult, safe_output_dir
 from . import texture as texture_pass
-from .guard.video import _ffmpeg, _frames_by_index, verify_chroma, verify_deblend, verify_video
+from .guard.video import _ffmpeg, _frames_by_index, verify_chroma, verify_deblend, verify_mask, verify_video
 from .probe import blend as blend_probe
 from .probe import chroma as chroma_probe
 from .probe import video as probe
@@ -301,8 +301,41 @@ def _describe_chroma(cs: avs.ChromaShift) -> str:
     return f"chroma shift: colour moved back onto the lines (Cb {d(cs.u_dx, cs.u_dy)} / Cr {d(cs.v_dx, cs.v_dy)})"
 
 
-def plan_prepass(p: probe.VideoProfile) -> tuple[list, str]:
-    """AviSynth+ / VapourSynth stages that must run before any model (empty when none is needed)."""
+MASK_MARGIN = 2                # rows added above the measured head-switching band
+
+
+def mask_stage(p: probe.VideoProfile) -> avs.MaskBottom | None:
+    """The bottom mask for measured head-switching noise (asked for with mask_tape_noise): the band plus a small
+    margin, rounded up to even rows (4:2:0), to a multiple of 4 for interlaced sources."""
+    if "head_switching" not in p.flags:
+        return None
+    rows = int(p.tape.get("head_switching_rows") or 0) + int(p.tape.get("bottom_border_rows") or 0) + MASK_MARGIN
+    step = 4 if {"interlaced", "telecine"} & set(p.flags) else 2
+    return avs.MaskBottom(rows=-(-rows // step) * step)
+
+
+def tape_notes(p: probe.VideoProfile, masked: bool = False) -> list[str]:
+    """Plain-language notes on tape defects (videohelp thread 380626): what was found and what can be done."""
+    t, notes = p.tape or {}, []
+    if "head_switching" in p.flags:
+        rows = t.get("head_switching_rows")
+        notes.append(f"VHS head-switching noise in the bottom {rows} lines ({t.get('head_switching_share', 0):.0%} "
+                     "of sampled frames): " + ("masked black, as asked" if masked else
+                     "left as it is (ask for mask_tape_noise / --mask-tape-noise to black it out)"))
+    if "top_flagging" in p.flags:
+        notes.append(f"the top of the picture bends sideways (tape \"flagging\", about {t.get('flagging_px', 0):g} px "
+                     f"in {t.get('flagging_share', 0):.0%} of sampled frames): a timing error that software cannot fix; "
+                     "capture the tape again through a VCR or DVD recorder with a line time-base corrector (TBC)")
+    if "clipped_highlights" in p.flags:
+        notes.append(f"bright areas are clipped at the top of the range ({t.get('clipped_share', 0):.0%} of sampled "
+                     "frames): the detail there is gone and cannot be restored; for a tape, capture again with "
+                     "lower brightness/contrast (and losslessly, e.g. HuffYUV or Lagarith with PCM audio)")
+    return notes
+
+
+def plan_prepass(p: probe.VideoProfile, mask_tape_noise: bool = False) -> tuple[list, str]:
+    """AviSynth+ / VapourSynth stages that must run before any model (empty when none is needed).
+    mask_tape_noise: also black out measured head-switching noise (only when the person asks)."""
     tff = p.field_order != "bff"
     stages: list = []
     why: list[str] = []
@@ -323,6 +356,10 @@ def plan_prepass(p: probe.VideoProfile) -> tuple[list, str]:
     if cs:
         stages.append(cs)
         why.append(_describe_chroma(cs))
+    ms = mask_stage(p) if mask_tape_noise else None
+    if ms:
+        stages.append(ms)
+        why.append(f"head-switching noise: bottom {ms.rows} rows masked black (asked for)")
     if "blended" in p.flags:
         stages.append(avs.SRestore())
     return stages, "; ".join(why)
@@ -474,23 +511,27 @@ def run_deblend(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
     return dst, info
 
 
-def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple[Path | None, dict]:
+def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print,
+                mask_tape_noise: bool = False) -> tuple[Path | None, dict]:
     """Classical pre-pass: field handling (when planned), then un-blending (when planned). Returns the new base,
     or None when field handling failed (the original then stays the deliverable)."""
-    stages, why = plan_prepass(p)
+    stages, why = plan_prepass(p, mask_tape_noise)
     field_stages = [s for s in stages if not isinstance(s, avs.SRestore)]
     if field_stages:
         base, info = _run_field_prepass(src, work, p, field_stages, why, log)
-        if base is not None and any(isinstance(s, avs.ChromaShift) for s in field_stages) \
-                and not info.get("chroma_check", {}).get("passed", False):
-            # the colour did not line up: field handling alone (or the source as it is)
-            without = [s for s in field_stages if not isinstance(s, avs.ChromaShift)]
-            log("   chroma correction rejected by its check: continuing without it")
-            for f in ("prepass.nut", "prepass.done"):
-                (work / f).unlink(missing_ok=True)
-            note = info.get("chroma_check")
-            base, info = _run_field_prepass(src, work, p, without, why, log) if without else (src, {"plan": why})
-            info["chroma_check"] = note
+        notes = {}
+        for kind, key in ((avs.ChromaShift, "chroma_check"), (avs.MaskBottom, "mask_check")):
+            if base is not None and any(isinstance(s, kind) for s in field_stages) \
+                    and not info.get(key, {}).get("passed", False):
+                # a correction did not come out as planned: the pass again without it (or the source as it is)
+                field_stages = [s for s in field_stages if not isinstance(s, kind)]
+                log(f"   {key.replace('_', ' ')} failed: continuing without that step")
+                for f in ("prepass.nut", "prepass.done"):
+                    (work / f).unlink(missing_ok=True)
+                notes[key] = info.get(key)
+                base, info = (_run_field_prepass(src, work, p, field_stages, why, log) if field_stages
+                              else (src, {"plan": why}))
+        info.update(notes)
     else:
         base, info = src, {"plan": why}
     if base is None:
@@ -535,8 +576,10 @@ def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: lis
     has_field = _has_field_stage(stages)
     if not info.get("ok"):
         reason = "; ".join(tried)
-        vf = ",".join(x for x in ((_fallback_vf(p)[0] if has_field else None), _fallback_chroma_vf(stages)) if x) \
-            or "null"
+        ms = next((s for s in stages if isinstance(s, avs.MaskBottom)), None)
+        vf = ",".join(x for x in ((_fallback_vf(p)[0] if has_field else None), _fallback_chroma_vf(stages),
+                                  f"drawbox=x=0:y=ih-{ms.rows}:w=iw:h={ms.rows}:color=black:t=fill" if ms else None)
+                      if x) or "null"
         colour = avs._rate(src)[2]
         if avs.is_full_range(colour):
             vf += ",scale=in_range=full:out_range=limited"
@@ -560,11 +603,19 @@ def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: lis
     log(f"   pre-pass guard: {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
     if rep_.passed and any(isinstance(s, avs.ChromaShift) for s in stages):
         cs = next(s for s in stages if isinstance(s, avs.ChromaShift))
+        masked = any(isinstance(s, avs.MaskBottom) for s in stages)
         ch = verify_chroma(src, dst, moved={"u": [cs.u_dx, cs.u_dy], "v": [cs.v_dx, cs.v_dy]},
-                           before=p.chroma.get("excess") or {"u": [0, 0], "v": [0, 0]}, luma_must_match=not has_field)
+                           before=p.chroma.get("excess") or {"u": [0, 0], "v": [0, 0]},
+                           luma_must_match=not has_field and not masked)
         info["chroma_check"] = {"passed": ch.passed, "gates": {g.name: {"status": g.status, "value": g.value,
                                                                          "detail": g.detail} for g in ch.gates}}
         log(f"   chroma check: {'PASS' if ch.passed else 'FAIL ' + ','.join(ch.failed())}")
+    if rep_.passed and any(isinstance(s, avs.MaskBottom) for s in stages):
+        ms = next(s for s in stages if isinstance(s, avs.MaskBottom))
+        mk = verify_mask(src, dst, rows=ms.rows, luma_must_match=not has_field)
+        info["mask_check"] = {"passed": mk.passed, "rows": ms.rows, "gates": {
+            g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in mk.gates}}
+        log(f"   mask check: {'PASS' if mk.passed else 'FAIL ' + ','.join(mk.failed())}")
     if rep_.passed:
         done.write_text(json.dumps({k: v for k, v in info.items() if k != "script"}, default=str), encoding="utf-8")
     return (dst if rep_.passed else None), info
@@ -597,7 +648,8 @@ def _cut(src: Path, start: float, seconds: float, dst: Path) -> None:
 
 def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encoder: str = "hevc10",
                   on_progress: Callable[[int, int], None] | None = None, log=print,
-                  scale: float | None = None, content: str = "auto", model: str | None = None) -> VideoRecord:
+                  scale: float | None = None, content: str = "auto", model: str | None = None,
+                  mask_tape_noise: bool = False) -> VideoRecord:
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
     work = out_dir / "work" / src.stem
@@ -619,16 +671,20 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
     rec.plan, cands = plan_candidates(prof, scale, content, model)
     options = ({"scale": scale, "content": content} | ({"model": model} if model else {})
                | ({"engine": config.VIDEO_ENGINE} if config.VIDEO_ENGINE != "auto" else {})
-               | ({"texture": config.TEXTURE_STRENGTH} if config.TEXTURE_STRENGTH != 1.0 else {}))
+               | ({"texture": config.TEXTURE_STRENGTH} if config.TEXTURE_STRENGTH != 1.0 else {})
+               | ({"mask_tape_noise": True} if mask_tape_noise else {}))
     drawn = is_anime(prof, content)
     log(f"   plan: {rec.plan}")
+    for n in tape_notes(prof, masked=mask_tape_noise and "head_switching" in prof.flags):
+        rec.notes.append(n)
+        log(f"   note: {n}")
     if not cands:
         rec.notes.append(f"nothing to do: {rec.plan}; the original stays the deliverable")
         (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
         return rec
     base = src
-    if plan_prepass(prof)[0]:
-        pre, rec.prepass = run_prepass(src, work, prof, log)
+    if plan_prepass(prof, mask_tape_noise)[0]:
+        pre, rec.prepass = run_prepass(src, work, prof, log, mask_tape_noise=mask_tape_noise)
         if pre is None:
             rec.notes.append("classical pre-pass failed or did not pass the guard: the original stays the deliverable")
             (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
