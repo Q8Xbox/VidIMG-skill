@@ -25,7 +25,7 @@ After setup the person restarts Claude Code (a cloned project also approves the 
 | Check the setup | `doctor()` | First, if anything fails or on a new machine. |
 | Understand the file | `analyze_media(path)` | Profile + the plan the pipeline will follow. For videos it also returns `frames_sheet`: **look at it** to decide cartoon/anime vs real footage. |
 | Restore photos | `restore_photos(paths, out_dir?, deblur?)` | Background job → `job_status`. `deblur=true` only when the person asks for blur removal. |
-| Restore a video | `restore_video(path, out_dir?, preview_only?, scale?, content?, model?)` | Background job → `job_status`. `content='anime'` for cartoons/anime, `'real'` for camera footage (decide from the frames sheet); `scale=2` when the person asks for exactly 2x. Use `preview_only=true` first for long videos. `model` only when the person picks one (e.g. `cugan-pro` after comparing): it becomes the only candidate, and a guard rejection keeps the original. |
+| Restore a video | `restore_video(path, out_dir?, preview_only?, scale?, content?, model?)` | Background job → `job_status`. `content='anime'` for cartoons/anime, `'real'` for camera footage (decide from the frames sheet); `scale=2` when the person asks for exactly 2x. Use `preview_only=true` first for long videos. `model`: **you choose it** from `model_guide` and the frames sheet (see Workflow step 2); it goes first and the approved order follows if the guard rejects it. `model_strict=true` only when the person insists on one model (then a guard rejection keeps the original). |
 | Follow a job | `job_status(job_id)`, `list_jobs()`, `cancel_job(job_id)`, `resume_job(job_id)` | Poll about every 30–60 s for videos, 15–30 s for photos. Jobs queue on one GPU lock; a stopped job resumes where it stopped. |
 | Judge any pair | `verify_restoration(original, result)` | For files made elsewhere. |
 | Before/after | `compare_frames(original, result)` | Image sheet with face zooms. |
@@ -49,17 +49,24 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    noise, compression, interlace/telecine, blended fields, chroma shift, tape defects, face sizes) and what the plan is.
    When `tape_advice` is present, pass it on: head-switching noise can be blacked out only if the person asks
    (`mask_tape_noise=True`); flagging and clipped highlights need a new capture (line TBC, lossless, lower brightness).
-2. Start the job. Default outputs go to `<VIDIMG_OUTPUT or workspace>/review*/<time>/`; never choose an output folder that
+2. **Choose the model yourself.** `analyze_media` returns `model_guide`: the signals that matter for this video
+   (content, faces and their size, noise, compression, flags), every model's measured strengths and weaknesses
+   with its estimated hours here, and a suggested pick with reasons. Check the suggestion against what you see on
+   the frames sheet, for example realistic drawn faces in a cartoon (cugan-pro), a long video with no faces
+   (general-v3), or real faces when the faithful model fits the time (realesrnet). Then tell the person in one or two
+   sentences which model you chose and why, and pass it as `model=`. Do not ask them to choose; they can still name
+   a model, which you then pass with `model_strict=true` if they insist on it.
+3. Start the job. Default outputs go to `<VIDIMG_OUTPUT or workspace>/review*/<time>/`; never choose an output folder that
    holds originals (the tool refuses it anyway).
-3. Poll `job_status` until `done`/`failed`. While it runs, relay progress sparingly.
-4. Report from the job result, in English:
+4. Poll `job_status` until `done`/`failed`. While it runs, relay progress sparingly.
+5. Report from the job result, in English:
    - delivered or not, per file; for videos the chosen model, the classical pre-pass (if any) and the
      final gates (VMAF, identity, structure, colour, flicker);
    - the report page path (`report` field) so the person can look at the before/after frames;
    - for anything not delivered, the reason the guard gave, and that the original is untouched.
-5. Ask the person to look at the faces in the report. Their visual verdict outranks the numbers.
+6. Ask the person to look at the faces in the report. Their visual verdict outranks the numbers.
 
-## What the tool uses (approved defaults — do not change on your own)
+## What the tool uses (approved defaults — do not change on your own; the video model is your choice per video, from `model_guide`)
 
 - **Photos:** SCUNet denoise when noisy; then BSRNet → RealESRNet → SwinIR, non-GAN models only (on the
   person's ground truth BSRNet was the most faithful: true identity 0.811). The person reviewed 19
