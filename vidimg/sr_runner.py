@@ -5,7 +5,9 @@ main tool. Models are the pinned open ones in tools/free-models (manifest.json).
             spec = {"model", "inputs": [...], "out_dir", "suffix", "scale": float, "tile": int}
             -> <out_dir>/<stem><suffix>.png (16-bit), prints one JSON line per image
     video:  python -I sr_runner.py video spec.json   (raw rgb24 frames on stdin, raw rgb48le on stdout)
-            spec = {"model", "width", "height", "out_width", "out_height", "batch"}
+            spec = {"model", "width", "height", "out_width", "out_height", "batch", "tile"}
+            tile/batch "auto": whole frames (batched) when they fit the GPU memory budget, else
+            512-px tiles with a 32-px overlap, one frame at a time; out of memory -> tiles.
 
 Output size is always the requested one: the model's native scale is followed by a Lanczos resize
 (down) or nothing; a model never decides the output size by itself.
@@ -20,6 +22,9 @@ import cv2
 import numpy as np
 import torch
 from spandrel import ImageModelDescriptor, ModelLoader
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tiling import OVERLAP, TILE, plan_frames  # noqa: E402  (plain module next to this worker)
 
 DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -44,7 +49,7 @@ def _pad_to(t: torch.Tensor, mult: int) -> tuple[torch.Tensor, int, int]:
 
 
 @torch.inference_mode()
-def run_tensor(d, half: bool, x: torch.Tensor, tile: int = 0, overlap: int = 16) -> torch.Tensor:
+def run_tensor(d, half: bool, x: torch.Tensor, tile: int = 0, overlap: int = OVERLAP) -> torch.Tensor:
     """x: NCHW float in [0,1] on DEV -> model output, tiled when tile > 0 (overlaps cropped)."""
     mult = max(1, getattr(d.size_requirements, "multiple_of", 1) or 1)
     s = d.scale
@@ -92,7 +97,7 @@ def image_mode(spec: dict) -> None:
         rgb = cv2.cvtColor(src, cv2.COLOR_BGR2RGB).astype(np.float32) / peak
         x = torch.from_numpy(rgb).permute(2, 0, 1)[None].to(DEV)
         try:
-            y = run_tensor(d, half, x, spec.get("tile", 512))
+            y = run_tensor(d, half, x, spec.get("tile", TILE))
         except torch.OutOfMemoryError:
             torch.cuda.empty_cache()
             y = run_tensor(d, half, x, 256)
@@ -113,7 +118,12 @@ def video_mode(spec: dict) -> None:
     torch.backends.cudnn.benchmark = True
     d, half = load(spec["model"])
     w, h, ow, oh = spec["width"], spec["height"], spec["out_width"], spec["out_height"]
-    batch = max(1, int(spec.get("batch", 4)))
+    tile, batch = spec.get("tile", 0), spec.get("batch", 4)
+    if tile == "auto" or batch == "auto":
+        total = torch.cuda.get_device_properties(0).total_memory if DEV.type == "cuda" else None
+        tile, batch = plan_frames(w, h, bool(spec.get("heavy", True)), total)
+    tile, batch = int(tile), max(1, int(batch))
+    sys.stderr.write(json.dumps({"plan": {"tile": tile, "batch": batch}}) + "\n")
     fsize = w * h * 3
     rd, wr = sys.stdin.buffer, sys.stdout.buffer
     q_in: "queue.Queue[bytes | None]" = queue.Queue(maxsize=batch * 4)
@@ -149,7 +159,13 @@ def video_mode(spec: dict) -> None:
                 break
             x = torch.from_numpy(np.frombuffer(b"".join(bufs), np.uint8).reshape(len(bufs), h, w, 3)).to(DEV, non_blocking=True)
             x = x.permute(0, 3, 1, 2).float().div_(255.0)
-            y = run_tensor(d, half, x, spec.get("tile", 0))
+            try:
+                y = run_tensor(d, half, x, tile)
+            except torch.OutOfMemoryError:                  # the budget was optimistic: tiles from here on
+                torch.cuda.empty_cache()
+                tile = tile or TILE
+                sys.stderr.write(json.dumps({"plan": {"tile": tile, "out_of_memory": True}}) + "\n")
+                y = torch.cat([run_tensor(d, half, x[i:i + 1], tile) for i in range(len(x))])
             if (y.shape[-1], y.shape[-2]) != (ow, oh):
                 mode = "area" if ow < y.shape[-1] else "bicubic"
                 y = torch.nn.functional.interpolate(y, size=(oh, ow), mode=mode,
