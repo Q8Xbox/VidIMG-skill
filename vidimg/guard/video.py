@@ -16,7 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .. import media
+from .. import media, texture
 from . import Gate, GuardReport, SUGGEST, thresholds, verify_image
 
 VIDEO_THRESHOLDS = {
@@ -164,13 +164,15 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
     pts = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries",
                           "packet=pts_time", "-read_intervals", "%+#40", "-of", "csv=p=0", str(dst)],
                          capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.split()
+    # first field only: ffprobe adds empty columns for frames with side data (x265 grain-tune output: "0.000000,")
+    pts = [x.split(",")[0] for x in pts]
     vals = sorted(float(x) for x in pts if x not in ("N/A", ""))
     # and in DISPLAY order (decoded frames) they must rise strictly: stamps assigned in packet order to a stream with
     # B-frames were all distinct yet shuffled the frames on playback (Sample03, before --max-b-frames 0)
     fts = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=pts_time",
                           "-read_intervals", "%+#40", "-of", "csv=p=0", str(dst)],
                          capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.split()
-    fvals = [float(x) for x in fts if x not in ("N/A", "")]
+    fvals = [float(f) for f in (x.split(",")[0] for x in fts) if f not in ("N/A", "")]
     if len(vals) >= 3:
         rising = all(b > a for a, b in zip(fvals, fvals[1:])) if len(fvals) >= 3 else True
         ok = len(set(vals)) == len(vals) and rising
@@ -221,6 +223,7 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
             if s0p and s1p and d0p and d1p:
                 sf += [s0p, s1p]
                 df += [d0p, d1p]
+        flat_up: list[float] = []
         for i in range(0, min(len(sf), len(df)) - 1, 2):
             # Interlaced sources: Dione reconstructs moving frames from both fields with motion
             # compensation; no simple reference (bwdif first field, second field or field mode)
@@ -238,6 +241,9 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
                     worst[g.name] = g
             s0, s1 = cv2.imread(str(sf[i])), cv2.imread(str(sf[i + 1]))
             d0, d1 = cv2.imread(str(df[i])), cv2.imread(str(df[i + 1]))
+            if s0 is not None and d0 is not None and not interpolated:
+                fr, fo = texture.flat_shares(cv2.cvtColor(s0, cv2.COLOR_BGR2GRAY), cv2.cvtColor(d0, cv2.COLOR_BGR2GRAY))
+                flat_up.append(fo - fr)
             if s0 is not None and d0 is not None and s1 is not None and d1 is not None and not interpolated:
                 size = (s0.shape[1], s0.shape[0])
                 d0, d1 = (cv2.resize(x, size, interpolation=cv2.INTER_AREA) for x in (d0, d1))
@@ -261,6 +267,13 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
                     and g.value >= vt["backprojection_gross"]:
                 g.status = "warn"
             gates.append(g)
+    if flat_up:
+        # over-smoothing ("denoised to death"): flat area between the lines grew vs a bicubic upscale. Advisory:
+        # removing noise is legitimate, but the person should see when texture went with it
+        up = float(np.median(flat_up))
+        gates.append(Gate("texture", "warn" if up > texture.FLAT_INCREASE_WARN else "pass", round(up, 3),
+                          texture.FLAT_INCREASE_WARN,
+                          f"flat area between the lines {'+' if up >= 0 else ''}{up:.0%} vs a plain upscale"))
     if se and de:
         s_med, d_med = float(np.median(se)), float(np.median(de))
         added = d_med - s_med

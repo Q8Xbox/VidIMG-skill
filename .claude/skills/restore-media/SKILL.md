@@ -70,6 +70,10 @@ DirectML on AMD or Intel GPUs) unless the person asks.
   the colour planes only; its check re-measures and requires bit-identical luma. Then the
   faithful RealESRNet / BSRNet when their estimated run fits in about 3 hours, otherwise the fast
   Real-ESRGAN general-v3. Long videos run in resumable chunks.
+- **Texture return** (default strength 1): every model smooths fine texture between the lines; afterwards the
+  source's own texture is put back there (lines untouched, nothing invented) and the file is encoded with x265
+  grain tune. `texture=0` only when the person wants the model's clean look; lower it if returned compression
+  noise bothers them.
 - **Anime / cartoons** (`content='anime'`, or detected with no real face): Video2X Real-ESRGAN anime-v3 first,
   Real-CUGAN second, general-v3 third (cartoon ground truth, PLAN.md 3.7). Face gates are advisory on drawn faces.
   Real-ESRGAN / Real-CUGAN anime models are never used on real faces (they distorted them in testing).
@@ -89,6 +93,7 @@ DirectML on AMD or Intel GPUs) unless the person asks.
 | landmarks, eye_color | Facial geometry and eye colour unchanged |
 | color | ΔE colour shift ≤ 4 |
 | hallucination | Warning when much more fine texture appears than the original could hold |
+| texture | Warning when much more of the area between the lines turned flat than in a plain upscale (over-smoothing, "denoised to death") |
 | frames, duration, audio | Video structure identical |
 | av_sync | Video/audio start offset unchanged (lip sync) |
 | aspect | On-screen shape unchanged (pixel aspect kept: a PAL 720x576 at 16:15 must stay 4:3, not 5:4) |

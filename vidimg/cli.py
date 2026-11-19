@@ -59,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     rvv.add_argument("--engine", default=None, choices=config.VIDEO_ENGINE_CHOICES,
                      help="engine for RealESRNet/BSRNet/general-v3: auto (PyTorch where CUDA works, else vs-mlrt), "
                           "torch, or mlrt (ONNX Runtime DirectML, any DirectX 12 GPU)")
+    rvv.add_argument("--texture", type=float, default=None,
+                     help="source texture put back after the model, 0..1 (default 1; 0 = off, the model's clean look)")
 
     rs = sub.add_parser("restore-series",
                         help="restore numbered episodes of one folder into ONE folder + one series comparison report")
@@ -71,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     rs.add_argument("--model", default=None, choices=config.VIDEO_MODEL_CHOICES)
     rs.add_argument("--encoder", default="hevc10", choices=sorted(media.ENCODERS))
     rs.add_argument("--engine", default=None, choices=config.VIDEO_ENGINE_CHOICES)
+    rs.add_argument("--texture", type=float, default=None, help="source texture put back, 0..1 (default 1)")
     rs.add_argument("--report-only", action="store_true", help="only rebuild the series report of OUT")
 
     an = sub.add_parser("analyze", help="measured degradation profile of an image or video")
@@ -114,6 +117,10 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     if getattr(a, "engine", None):
         config.VIDEO_ENGINE = a.engine
+    if getattr(a, "texture", None) is not None:
+        if not 0 <= a.texture <= 1:
+            ap.error("--texture must be between 0 and 1")
+        config.TEXTURE_STRENGTH = a.texture
 
     if a.cmd == "restore-video":
         from datetime import datetime

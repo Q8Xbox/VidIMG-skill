@@ -37,6 +37,11 @@ open models and the WhatsApp video restored with RealESRNet: "all faces look rig
   faithful RealESRNet / BSRNet when their estimated run fits in about 3 hours, otherwise Real-ESRGAN
   general-v3 (7.8 fps at 720p → 1080p). Long videos run in 2-minute chunks with context frames and
   boundaries on scene cuts, audio muxed once, resumable.
+- **Texture kept:** every model also smooths away fine texture between the lines (painted backgrounds, grain,
+  cloth). After the model, the source's own texture is put back between the lines (`--texture 0..1`, default 1;
+  nothing invented, the lines stay as sharp as the model made them) and the result is encoded with x265's grain
+  tune, because the hardware HEVC encoder flattened low-contrast texture by itself. The guard and the reports
+  show the flat area between the lines against a plain upscale.
 - **Batches:** photos are processed in rounds; photos with identical settings share one model call
   (the model loads once) and every photo is checkpointed in `<out>/items/`.
 - **Guard:** face identity (SFace), face and overall structure, landmarks, eye colour, colour shift,

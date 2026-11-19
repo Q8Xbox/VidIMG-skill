@@ -161,10 +161,18 @@ ENCODERS: dict[str, list[str]] = {
              "-tune", "hq", "-rc", "constqp", "-qp", "16"],
     "prores": ["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le", "-vendor", "apl0"],
     "ffv1": ["-c:v", "ffv1", "-level", "3", "-pix_fmt", "yuv444p10le"],      # lossless intermediate
+    # lossless 10-bit intermediate that MP4 chunks can hold (the texture pass reads it; deleted afterwards)
+    "lossless": ["-c:v", "hevc_nvenc", "-preset", "p4", "-tune", "lossless", "-pix_fmt", "p010le"],
+    # final encode after texture return. NVENC at QP 16 flattened low-contrast texture by itself (flat area between
+    # the lines 0.21 -> 0.34 on a lossless input, QP 12 / adaptive quantisation barely better); x265 medium with the
+    # grain tune kept it (0.19, source 0.18) at 27 fps for 720x576 x2, about 1.7x the file size
+    "hevc10-grain": ["-c:v", "libx265", "-pix_fmt", "yuv420p10le", "-crf", "14", "-preset", "medium", "-tune", "grain",
+                     "-x265-params", "log-level=error"],
 }
 CPU_FALLBACK = {
     "hevc10": ["-c:v", "libx265", "-pix_fmt", "yuv420p10le", "-crf", "14", "-preset", "slow"],
     "h264": ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "14", "-preset", "slow"],
+    "lossless": ["-c:v", "libx264", "-preset", "ultrafast", "-qp", "0", "-pix_fmt", "yuv420p10le"],
 }
 _NVENC: bool | None = None
 

@@ -214,6 +214,17 @@ lines themselves) is not touched and no colour is changed, only its position. A 
 and keeps the correction only if the colour now lines up and the brightness is bit-identical. Interlaced videos
 get the horizontal part only.
 
+**Texture between the lines ("denoised to death").** Every enhancement model, faithful ones included, also smooths
+away fine texture between the drawn lines: painted backgrounds turn into smooth patches and cloth loses its pattern,
+while the lines themselves get sharper. After the model, VidIMG therefore puts the source's own texture back between
+the lines, only where the model removed it, and leaves the lines as the model drew them. Nothing new is invented: it
+is the original's texture, in its own place. It also brings back a little of the original's compression noise, so
+the amount can be set: `--texture 1` (default, everything the model removed), `--texture 0.5`, or `--texture 0` for
+the model's clean, smooth look. With texture return the final file is encoded with x265 (grain tune, about 1.7x the
+size), because the graphics card's HEVC encoder smoothed fine texture away by itself; this costs a temporary lossless
+file of about 1 GB per minute of output while it runs. The final check and the reports show the "flat area between
+the lines" compared with a plain upscale of the original: near 0 means the texture was kept.
+
 **Blended fields (NTSC↔PAL conversions).** Some old copies were converted between the American (NTSC, 29.97 fps)
 and European (PAL, 25 fps) systems by blending neighbouring pictures, so moving parts show as see-through double
 images ("ghosts"). No filter or model can fix those frames: they would only sharpen the ghosts. The analysis
