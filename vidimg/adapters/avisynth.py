@@ -223,6 +223,20 @@ class ChromaShift:
 
 
 @dataclass
+class MaskBottom:
+    """Black out the bottom rows (VHS head-switching noise), on request only: the frame keeps its size and
+    shape, the rows above are untouched. Crop + AddBorders (limited-range black); runs after field handling."""
+
+    rows: int = 8
+
+    def rate(self) -> Fraction:
+        return Fraction(1)
+
+    def lines(self) -> list[str]:
+        return [f"Crop(0, 0, 0, -{self.rows})", f"AddBorders(0, 0, 0, {self.rows})"]
+
+
+@dataclass
 class SRestore:
     """Blended fields/frames from a standards conversion -> the original pictures at the original rate.
     sRestore picks, for each original picture, the least blended frame (bobbed fields for interlaced input);
@@ -240,12 +254,13 @@ class SRestore:
         raise NotImplementedError("sRestore runs in the VapourSynth backend only")
 
 
-AvsStage = Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | SRestore
+AvsStage = Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | MaskBottom | SRestore
 # processing order from the Doom9 consensus (04_doom9_practice.md 1.1). Deblock runs on the original
 # grid; for interlaced input, field handling comes first (Deblock_QED needs progressive frames).
 # Un-blending comes right after field handling: every later stage would smear the ghosts further.
 # Chroma shift is corrected on progressive frames, right after field handling.
-_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, SRestore: 2.2, ChromaDenoise: 3, Degrain: 4,
+_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, ChromaDenoise: 3,
+          Degrain: 4,
           Repair: 5}
 
 

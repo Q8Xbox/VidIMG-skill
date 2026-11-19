@@ -85,7 +85,8 @@ def doctor() -> dict:
 def analyze_media(path: str) -> dict:
     """Measure a photo or video and return its degradation profile plus the restoration plan the
     pipeline would follow (nothing is written). Photos: noise, softness, JPEG quality, faces and their
-    sizes, anime detection. Videos: interlace/telecine, blended fields, chroma shift, compression, blur, noise, scene cuts, duplicates,
+    sizes, anime detection. Videos: interlace/telecine, blended fields, chroma shift, tape defects (tape_advice: head
+    switching, flagging, clipped highlights), compression, blur, noise, scene cuts, duplicates,
     faces; the classical pre-pass and the model candidates."""
     p = _existing(path)
     with _quiet():
@@ -96,7 +97,8 @@ def analyze_media(path: str) -> dict:
             why, cands = pipeline_video.plan_candidates(prof)
             pre, pre_why = pipeline_video.plan_prepass(prof)
             sheet = pipeline_video.frames_sheet(p, config.OUTPUT_ROOT / "analysis" / f"{p.stem}_frames.jpg")
-            return {"type": "video", "profile": prof.to_dict(),
+            advice = pipeline_video.tape_notes(prof)
+            return {"type": "video", "profile": prof.to_dict(), "tape_advice": advice or None,
                     "frames_sheet": str(sheet) if sheet else None,
                     "content_hint": ("LOOK at frames_sheet: if it is a cartoon/anime, call restore_video with "
                                      "content='anime' (the automatic probe often misses old compressed cartoons and "
@@ -133,7 +135,7 @@ def restore_photos(paths: list[str], out_dir: str | None = None, deblur: bool = 
 @mcp.tool()
 def restore_video(path: str, out_dir: str | None = None, preview_only: bool = False,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
-                  engine: str | None = None) -> dict:
+                  engine: str | None = None, mask_tape_noise: bool = False) -> dict:
     """Start a background job restoring one video: analyse; classical field handling first when needed
     (QTGMC for interlace, TFM+TDecimate for telecine, chroma-shift correction, sRestore for blended fields
     from a standards conversion); open-model candidates on three guarded preview
@@ -148,7 +150,10 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     esrgan-v3, cugan, cugan-pro (anime/cartoon), general-v3, realesrnet, bsrnet. That model is then the only
     candidate; if the guard rejects it the original stays.
     engine: leave unset (auto: PyTorch where CUDA works, vs-mlrt / ONNX Runtime DirectML otherwise); 'torch' or
-    'mlrt' only when the person asks. Returns the job; poll job_status(job_id)."""
+    'mlrt' only when the person asks.
+    mask_tape_noise: only when the person asks to hide VHS head-switching noise (analyze_media's tape_advice
+    says when it was found): the bottom lines it covers are blacked out; the frame keeps its size.
+    Returns the job; poll job_status(job_id)."""
     src = _existing(path)
     if src.suffix.lower() not in VIDEO_EXT:
         raise ValueError(f"not a video: {src.name}")
@@ -161,7 +166,7 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
         raise ValueError(f"engine must be one of {config.VIDEO_ENGINE_CHOICES}")
     args = ([str(src)] + (["--preview-only"] if preview_only else []) + (["--scale", f"{scale:g}"] if scale else [])
             + (["--content", content] if content != "auto" else []) + (["--model", model] if model else [])
-            + (["--engine", engine] if engine else []))
+            + (["--engine", engine] if engine else []) + (["--mask-tape-noise"] if mask_tape_noise else []))
     return jobs.start("restore-video", args, out, src.name)
 
 

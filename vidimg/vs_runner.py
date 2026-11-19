@@ -91,6 +91,11 @@ def build(spec: dict) -> tuple[vs.VideoNode, Fraction | None]:
                 if dx or dy:
                     planes[i] = core.resize.Spline36(planes[i], src_left=-dx / sw, src_top=-dy / sh)
             c = core.std.ShufflePlanes(planes, [0, 0, 0], vs.YUV)
+        elif k == "mask":
+            # bottom rows to limited-range black; the frame keeps its size
+            sh = 16 - 8
+            c = core.std.AddBorders(core.std.Crop(c, bottom=st["rows"]), bottom=st["rows"],
+                                    color=[16 << sh, 128 << sh, 128 << sh])
         elif k == "srestore":
             c = core.std.AssumeFPS(c, fpsnum=rate_num, fpsden=rate_den)
             linear = Fraction(st["frate"])

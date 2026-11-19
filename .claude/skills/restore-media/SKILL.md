@@ -46,7 +46,9 @@ DirectML on AMD or Intel GPUs) unless the person asks.
 1. `analyze_media` on each file (or a sample of a folder). For a video, open its `frames_sheet` image and decide
    whether it is a cartoon/anime or real footage: the automatic probe misses old compressed cartoons and takes drawn
    faces for real ones (measured on the owner's samples). Tell the person, briefly, what you found (content type,
-   noise, compression, interlace/telecine, blended fields, chroma shift, face sizes) and what the plan is.
+   noise, compression, interlace/telecine, blended fields, chroma shift, tape defects, face sizes) and what the plan is.
+   When `tape_advice` is present, pass it on: head-switching noise can be blacked out only if the person asks
+   (`mask_tape_noise=True`); flagging and clipped highlights need a new capture (line TBC, lossless, lower brightness).
 2. Start the job. Default outputs go to `<VIDIMG_OUTPUT or workspace>/review*/<time>/`; never choose an output folder that
    holds originals (the tool refuses it anyway).
 3. Poll `job_status` until `done`/`failed`. While it runs, relay progress sparingly.
@@ -67,7 +69,9 @@ DirectML on AMD or Intel GPUs) unless the person asks.
   with sRestore back to the original rate (VapourSynth; rate chosen by trial; fewer frames, same duration and
   audio; its guard requires every output frame to be a copy of an input frame). Colour sitting beside the
   line art (profile flag `chroma_shift`, >= 1.25 px agreed by the sampled frames) is moved back by resampling
-  the colour planes only; its check re-measures and requires bit-identical luma. Then the
+  the colour planes only; its check re-measures and requires bit-identical luma. Tape defects (flags
+  `head_switching`, `top_flagging`, `clipped_highlights`) are reported, not repaired; only head-switching noise
+  is masked, and only on request (`mask_tape_noise`). Then the
   faithful RealESRNet / BSRNet when their estimated run fits in about 3 hours, otherwise the fast
   Real-ESRGAN general-v3. Long videos run in resumable chunks.
 - **Anime / cartoons** (`content='anime'`, or detected with no real face): Video2X Real-ESRGAN anime-v3 first,
