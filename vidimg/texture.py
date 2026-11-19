@@ -20,6 +20,8 @@ sharpness (0.94). It also returns some of the source's compression noise: hence 
 
 from __future__ import annotations
 
+from collections import deque
+
 import json
 import subprocess
 import threading
@@ -154,12 +156,22 @@ def apply(base: Path, restored: Path, dst: Path, strength: float, encoder: str =
 
     def feed(pipe) -> None:
         try:
+            # a bounded window: Executor.map would read the whole video into memory before the first frame is
+            # written (55 GB on a 25-minute episode, measured: the page file filled the system drive)
+            def put(buf: bytes) -> None:
+                pipe.write(buf)
+                count[0] += 1
+                if on_progress and count[0] % 50 == 0:
+                    on_progress(count[0], n)
+
             with ThreadPoolExecutor(max_workers=workers) as ex:
-                for buf in ex.map(work, frames(), chunksize=1):
-                    pipe.write(buf)
-                    count[0] += 1
-                    if on_progress and count[0] % 50 == 0:
-                        on_progress(count[0], n)
+                pending: deque = deque()
+                for item in frames():
+                    pending.append(ex.submit(work, item))
+                    if len(pending) >= workers * 2:
+                        put(pending.popleft().result())
+                while pending:
+                    put(pending.popleft().result())
         except Exception as e:  # noqa: BLE001
             err.append(f"{type(e).__name__}: {e}")
         finally:
