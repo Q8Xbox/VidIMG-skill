@@ -45,6 +45,17 @@ def test_head_switching_band_is_found_and_content_edges_are_not():
     assert border == 6 and rows >= 2
 
 
+def test_head_switching_must_hold_across_scenes():
+    scenes = [_head_switching(_picture(seed=k)) for k in range(8)]
+    d = tape.summarize(scenes)
+    assert d.head_switching and d.head_switching_rows == 8 and d.scenes == 8
+    # one static shot whose own picture "breaks" at one row, then other shots without it: not the tape
+    one_shot = [_head_switching(_picture(seed=1))] * 13 + [_picture(seed=k) for k in (2, 3, 4)]
+    d = tape.summarize(one_shot)
+    assert not d.head_switching and d.scenes == 4
+    assert not tape.summarize([_head_switching(_picture(seed=1))] * 16).head_switching      # one scene: cannot tell
+
+
 def test_flagging_needs_a_bend_that_grows_towards_the_top():
     y = _picture()
     bent = y.copy()
