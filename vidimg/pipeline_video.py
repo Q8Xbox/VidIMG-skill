@@ -422,7 +422,7 @@ def tape_notes(p: probe.VideoProfile, masked: bool = False) -> list[str]:
     if "head_switching" in p.flags:
         rows = t.get("head_switching_rows")
         notes.append(f"VHS head-switching noise in the bottom {rows} lines ({t.get('head_switching_share', 0):.0%} "
-                     "of sampled frames): " + ("masked black, as asked" if masked else
+                     "of sampled scenes): " + ("masked black, as asked" if masked else
                      "left as it is (ask for mask_tape_noise / --mask-tape-noise to black it out)"))
     if "top_flagging" in p.flags:
         notes.append(f"the top of the picture bends sideways (tape \"flagging\", about {t.get('flagging_px', 0):g} px "

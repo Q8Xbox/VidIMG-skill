@@ -38,6 +38,9 @@ SHIFT_JUMP = 3.0            # px: a row displaced at least this much from the ro
 PEAK_MATCH = 0.3            # ... while still matching it at that shift (displaced picture, not a content edge)
 HS_SHARE = 0.5              # head switching: a break at a consistent height in at least half the frames
 HS_ROW_TOL = 2              # rows: "consistent height"
+HS_MIN_SCENES = 2           # ... seen in at least this many different scenes: the defect belongs to the tape, so it
+SCENE_CORR = 0.85           # stays through every scene (a cartoon's static shot, feet above a floor with diagonal
+                            # lines, "broke" at the same row in 13 of 16 frames and in none of the next shot's)
 TOP_ZONE = 0.05             # flagging: the top 5 % of the frame
 FLAG_PX = 3.0               # px of accumulated displacement at the top edge, beyond every control band's
 FLAG_SIGN = 0.7             # share of the row steps that move the same way (the bend grows steadily)
@@ -63,6 +66,7 @@ class TapeDefects:
     clipped_share: float = 0.0              # share of frames with clipped highlights
     clipped_pixels: float = 0.0             # median share of pixels at the clip level in those frames
     limited_range: bool = True
+    scenes: int = 0                         # different scenes among the sampled frames (head switching votes)
     bottom_border_rows: int = 0             # flat rows already at the bottom (a capture's own mask)
     rows_per_frame: list[int] = field(default_factory=list)
 
@@ -178,6 +182,28 @@ def top_bend(y: np.ndarray) -> float:
     return max(0.0, abs(top) - control)
 
 
+def scene_votes(frames: list[np.ndarray], rows: list[int]) -> list[int]:
+    """Group the sampled frames into scenes (thumbnails that correlate) and return one band height per scene:
+    the median of its frames' heights when most of them show a break, else 0."""
+    thumbs = []
+    for f in frames:
+        t = cv2.resize(f[: int(f.shape[0] * 0.9)], (32, 24), interpolation=cv2.INTER_AREA).astype(np.float32).ravel()
+        thumbs.append((t - t.mean()) / (t.std() + 1e-6))
+    groups: list[list[int]] = []
+    for i, t in enumerate(thumbs):
+        for g in groups:
+            if float(np.mean(t * thumbs[g[0]])) >= SCENE_CORR:
+                g.append(i)
+                break
+        else:
+            groups.append([i])
+    votes = []
+    for g in groups:
+        hit = [rows[i] for i in g if rows[i]]
+        votes.append(int(np.median(hit)) if len(hit) * 2 > len(g) else 0)
+    return votes
+
+
 def read_luma(src: Path, times: list[float]) -> list[np.ndarray]:
     info = media.probe(src)
     w, h = info["width"], info["height"]
@@ -201,11 +227,15 @@ def summarize(frames: list[np.ndarray], limited_range: bool = True) -> TapeDefec
     bands = [bottom_break(f) for f in frames]
     d.rows_per_frame = [b for b, _ in bands]
     d.bottom_border_rows = int(np.median([br for _, br in bands]))
-    nz = [b for b in d.rows_per_frame if b]
+    # one vote per scene: the frames of one static shot all show the same picture edge
+    votes = scene_votes(frames, d.rows_per_frame)
+    d.scenes = len(votes)
+    nz = [b for b in votes if b]
     if nz:
         mode = int(np.median(nz))
-        d.head_switching_share = round(sum(abs(b - mode) <= HS_ROW_TOL for b in d.rows_per_frame) / len(frames), 3)
-        d.head_switching_rows = mode
+        agree = sum(abs(b - mode) <= HS_ROW_TOL for b in votes)
+        d.head_switching_share = round(agree / len(votes), 3) if agree >= HS_MIN_SCENES else 0.0
+        d.head_switching_rows = mode if agree >= HS_MIN_SCENES else 0
     bends = [top_bend(f) for f in frames]
     flagged = [b for b in bends if b >= FLAG_PX]
     d.flagging_share = round(len(flagged) / len(frames), 3)
