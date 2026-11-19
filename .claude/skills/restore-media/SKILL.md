@@ -46,7 +46,7 @@ DirectML on AMD or Intel GPUs) unless the person asks.
 1. `analyze_media` on each file (or a sample of a folder). For a video, open its `frames_sheet` image and decide
    whether it is a cartoon/anime or real footage: the automatic probe misses old compressed cartoons and takes drawn
    faces for real ones (measured on the owner's samples). Tell the person, briefly, what you found (content type,
-   noise, compression, interlace/telecine, face sizes) and what the plan is.
+   noise, compression, interlace/telecine, blended fields, face sizes) and what the plan is.
 2. Start the job. Default outputs go to `<VIDIMG_OUTPUT or workspace>/review*/<time>/`; never choose an output folder that
    holds originals (the tool refuses it anyway).
 3. Poll `job_status` until `done`/`failed`. While it runs, relay progress sparingly.
@@ -62,7 +62,10 @@ DirectML on AMD or Intel GPUs) unless the person asks.
 - **Photos:** SCUNet denoise when noisy; then BSRNet → RealESRNet → SwinIR, non-GAN models only (on the
   person's ground truth BSRNet was the most faithful: true identity 0.811). The person reviewed 19
   restored photos and said "all faces look right".
-- **Video:** classical field handling first (QTGMC for interlace, TFM+TDecimate for telecine); then the
+- **Video:** classical field handling first (QTGMC for interlace, TFM+TDecimate for telecine). Blended
+  fields/frames from an NTSC↔PAL conversion (ghosted double images; profile flag `blended`) are un-blended
+  with sRestore back to the original rate (VapourSynth; rate chosen by trial; fewer frames, same duration and
+  audio; its guard requires every output frame to be a copy of an input frame). Then the
   faithful RealESRNet / BSRNet when their estimated run fits in about 3 hours, otherwise the fast
   Real-ESRGAN general-v3. Long videos run in resumable chunks.
 - **Anime / cartoons** (`content='anime'`, or detected with no real face): Video2X Real-ESRGAN anime-v3 first,

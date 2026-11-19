@@ -85,7 +85,7 @@ def doctor() -> dict:
 def analyze_media(path: str) -> dict:
     """Measure a photo or video and return its degradation profile plus the restoration plan the
     pipeline would follow (nothing is written). Photos: noise, softness, JPEG quality, faces and their
-    sizes, anime detection. Videos: interlace/telecine, compression, blur, noise, scene cuts, duplicates,
+    sizes, anime detection. Videos: interlace/telecine, blended fields, compression, blur, noise, scene cuts, duplicates,
     faces; the classical pre-pass and the model candidates."""
     p = _existing(path)
     with _quiet():
@@ -135,7 +135,8 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
                   scale: float | None = None, content: str = "auto", model: str | None = None,
                   engine: str | None = None) -> dict:
     """Start a background job restoring one video: analyse; classical field handling first when needed
-    (QTGMC for interlace, TFM+TDecimate for telecine); open-model candidates on three guarded preview
+    (QTGMC for interlace, TFM+TDecimate for telecine, sRestore for blended fields from a standards
+    conversion); open-model candidates on three guarded preview
     segments (the faithful non-GAN models when their estimated run fits, otherwise Real-ESRGAN general;
     Video2X for anime); full run (chunked and resumable when long) with the first candidate that passes
     every preview; final guard; HEVC 10-bit with audio and metadata kept, English report.
