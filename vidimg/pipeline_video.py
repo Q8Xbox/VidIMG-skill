@@ -210,7 +210,7 @@ def model_guide(p: probe.VideoProfile, scale: float | None = None, content: str 
     fast_h = frames * p.width * p.height / (FREE_NONGAN_PIXELS_PER_S * 18) / 3600     # general-v3 ~18x faster
     hours = {"realesrnet": slow_h, "bsrnet": slow_h, "general-v3": fast_h}
     reading = "anime/cartoon" if anime else "real footage"
-    # the probe misreads both ways (an owner's cartoon read as real, a real clip as anime): the sheet decides
+    # the probe often reads old cartoons as real footage (three owner cartoons in a row): the frames sheet decides
     signals = {"content": reading if content != "auto" else f"{reading} (probe only; confirm on the frames sheet)",
                "size": f"{p.width}x{p.height} @ {p.fps:g} fps, {p.duration / 60:.1f} min",
                "faces": (f"up to {p.faces_max} per frame, smallest {p.face_min_height} px" if p.faces_max else "none seen"),

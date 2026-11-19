@@ -164,7 +164,17 @@ You do not need to memorize any commands. Just type what you want in plain words
 - "Analyze this video and tell me what its problems are before you start"
 - "Does this enhanced copy still look like the original? The original is this and the result is that"
 
+- "Restore everything in this folder: D:\Old Media" (photos, videos and series together)
+
 Claude follows the approved workflow in the `restore-media` skill and reports back to you in English.
+
+**What happens when you ask.** Claude first surveys what you gave it: it sorts the files into photos, single videos
+and numbered series, measures them, and prepares a plan with a decision for each (cartoon or real footage, which
+model, what size). It then looks at a contact sheet of all the videos, corrects the plan where the measurements
+were wrong, tells you in a few lines what it decided and why, and starts one job that works through everything.
+At the end you get one page (`index.html`) listing every item, what was decided, what was delivered and what kept
+its original, with links to the detailed before/after reports. If the job is interrupted, it continues where it
+stopped.
 
 ### 3.2 Short commands
 
@@ -173,6 +183,7 @@ When VidIMG is installed as a plugin, the commands start with the `vidimg:` pref
 | Command | What it does |
 |---|---|
 | `/setup-vidimg [results folder]` | Installs or repairs the tool |
+| `/restore <files or folders>` | Restores anything automatically: survey, decisions, one job, one combined report |
 | `/analyze-media <file>` | Analyzes the file and shows the plan without writing anything |
 | `/restore-photo <files or folders>` | Improves the photos and makes a review page |
 | `/restore-video <video> [preview]` | Improves the video: checked previews, then full processing, then a report |

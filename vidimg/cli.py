@@ -1,6 +1,8 @@
 """Command line (free tools only): `python -m vidimg <command>`.
 
 doctor [--json]                    environment report (open-model runtime, ffmpeg, classical engines, GPU)
+auto PATHS... [--out] [--run]      survey any mix of photos, videos and series folders into one plan (and run it)
+run-plan --out FOLDER              run (or continue) the plan in FOLDER: everything, one combined report
 restore PHOTOS_OR_FOLDERS [--out]  photo pipeline: analyse, restore, guard, review page
 restore-video VIDEO [--out]        video pipeline: field handling, guarded previews, full run, report
 restore-series FOLDER [--episodes] numbered episodes into ONE folder, resumable, + one series report
@@ -39,6 +41,13 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("doctor")
+
+    au = sub.add_parser("auto", help="survey photos, videos and series folders into one plan with decisions filled in")
+    au.add_argument("inputs", nargs="+", type=Path, help="files and/or folders (searched recursively)")
+    au.add_argument("--out", type=Path, help="output folder (default <output>/auto/<time>)")
+    au.add_argument("--run", action="store_true", help="run the plan at once with the analysis' own decisions")
+    rp = sub.add_parser("run-plan", help="run or continue a surveyed plan; writes one combined report")
+    rp.add_argument("--out", type=Path, required=True, help="the plan's folder (holds plan.json)")
 
     rv = sub.add_parser("restore", help="restore photos (analyse, restore, guard, retry) + review page")
     rv.add_argument("inputs", nargs="+", type=Path, help="image files or folders")
@@ -131,6 +140,27 @@ def main(argv: list[str] | None = None) -> int:
         if not 0 <= a.texture <= 1:
             ap.error("--texture must be between 0 and 1")
         config.TEXTURE_STRENGTH = a.texture
+
+    if a.cmd in ("auto", "run-plan"):
+        import time
+        from datetime import datetime
+        from . import auto
+
+        def say(m: str) -> None:
+            print(time.strftime("%H:%M:%S"), m, flush=True)
+        try:
+            if a.cmd == "auto":
+                out = a.out or (config.OUTPUT_ROOT / "auto" / datetime.now().strftime("%Y%m%d-%H%M%S"))
+                plan = auto.survey(a.inputs, out, log=say)
+                if not a.run:
+                    print(json.dumps(auto.summary(plan), indent=1, ensure_ascii=False, default=str))
+                    return 0 if plan["items"] else 1
+            plan = auto.run(a.out if a.cmd == "run-plan" else out, log=say)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"error: {e}")
+            return 2
+        print(json.dumps(auto.summary(plan), indent=1, ensure_ascii=False, default=str))
+        return 0 if all(it.get("state") != "error" for it in plan["items"]) else 1
 
     if a.cmd == "restore-video":
         from datetime import datetime

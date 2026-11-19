@@ -23,7 +23,7 @@ from . import config
 
 ROOT = config.OUTPUT_ROOT / "jobs"
 LOCK = ROOT / "gpu.lock"
-KINDS = {"restore-photos": "restore", "restore-video": "restore-video"}
+KINDS = {"restore-photos": "restore", "restore-video": "restore-video", "survey": "auto", "run-plan": "run-plan"}
 
 
 def _job_dir(job_id: str) -> Path:
@@ -153,6 +153,12 @@ def _tail(path: Path, n: int = 12) -> list[str]:
 
 def _result(meta: dict) -> dict:
     out = Path(meta["out"])
+    if meta["kind"] in ("survey", "run-plan"):
+        from . import auto
+        try:
+            return auto.summary(auto.load(out))
+        except (OSError, ValueError):
+            return {}
     if meta["kind"] == "restore-video":
         rec = _read(out / "record.json")
         if not rec:
@@ -181,8 +187,8 @@ def status(job_id: str) -> dict:
     res = {"id": job_id, "kind": meta["kind"], "label": meta["label"], "state": state, "out": meta["out"],
            "created": meta["created"], "started": st.get("started"), "finished": st.get("finished"),
            "returncode": st.get("returncode"), "resumed": st.get("resumed", 0), "log_tail": _tail(d / "log.txt")}
-    if state in ("done", "failed"):
-        res["result"] = _result(meta)
+    if state in ("done", "failed") or (meta["kind"] == "run-plan" and state in ("running", "cancelled", "crashed")):
+        res["result"] = _result(meta)                      # a running plan shows which items are finished
     return res
 
 
