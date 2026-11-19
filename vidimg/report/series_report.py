@@ -135,7 +135,10 @@ def episode_frames(original: Path, result: Path, outdir: Path, times: list[int] 
         ob = cv2.resize(o, (rw, rh), interpolation=cv2.INTER_CUBIC)
         back = cv2.resize(r, (ow, oh), interpolation=cv2.INTER_AREA)
         gob, gr, gback = (cv2.cvtColor(v, cv2.COLOR_BGR2GRAY) for v in (ob, r, back))
+        from .. import texture
+        flat_o, flat_r = texture.flat_shares(go, gr)          # over-smoothing between the lines (vs bicubic)
         metrics.append({"t": t, "sharpness_orig": _sharpness(gob), "sharpness_rest": _sharpness(gr),
+                        "flat_orig": flat_o, "flat_rest": flat_r,
                         "edge_orig": _edge(gob), "edge_rest": _edge(gr),
                         "blockiness_orig": blockiness(go), "blockiness_rest_down": blockiness(gback),
                         "deltaE_back": _delta_e(o, back), "psnr_back": float(cv2.PSNR(o, back))})
@@ -242,6 +245,7 @@ def collect(out: Path) -> list[dict]:
         m = json.loads(mfile.read_text(encoding="utf-8")) if mfile.exists() else []
         row["sharp_x"] = _mean([x["sharpness_rest"] / x["sharpness_orig"] for x in m if x["sharpness_orig"] > 0])
         row["edge_x"] = _mean([x["edge_rest"] / x["edge_orig"] for x in m if x["edge_orig"] > 0])
+        row["flat_up"] = _mean([x["flat_rest"] - x["flat_orig"] for x in m if "flat_rest" in x])
         row["psnr"] = _mean([x["psnr_back"] for x in m])
         row["dE"] = _mean([x["deltaE_back"] for x in m])
         row["block_o"] = _mean([x["blockiness_orig"] for x in m])
@@ -280,7 +284,7 @@ def page(rows: list[dict], out: Path, options: dict | None = None) -> str:
     tag = f"x{scale:g}" if scale else "restored"
     anime = options.get("content") == "anime" or any("anime" in (r["chosen"] or "") for r in done)
     vals = lambda name: [v for r in done for _, v in [_gate(r, name)] if isinstance(v, (int, float)) and not isinstance(v, bool)]
-    agg = lambda key: _mean([r[key] for r in done])
+    agg = lambda key: _mean([r.get(key) for r in done])
     tot_o = sum(r["orig"].get("mib", 0) for r in rows) / 1024
     tot_r = sum(r["rest"].get("mib", 0) for r in done) / 1024
     hours = sum(r["minutes"] or 0 for r in rows) / 60
@@ -319,6 +323,9 @@ def page(rows: list[dict], out: Path, options: dict | None = None) -> str:
     if agg("sharp_x"):
         card("Line sharpness", f"{agg('sharp_x'):.1f}×", f"range {min(r['sharp_x'] for r in done if r['sharp_x']):.1f}–{max(r['sharp_x'] for r in done if r['sharp_x']):.1f}×")
         card("Edge contrast", f"{agg('edge_x'):.2f}×", "strongest 5% of edges")
+    if agg("flat_up") is not None:
+        card("Texture between the lines", f"{agg('flat_up') * 100:+.0f} pts flat",
+             "flat area vs a plain upscale (near 0 = texture kept; large = smoothed away)")
     if vals("backprojection"):
         card("Structure kept", f"{_mean(vals('backprojection')):.3f}", "back-projection (pass ≥ 0.93)")
     if vals("color"):
@@ -350,8 +357,8 @@ def page(rows: list[dict], out: Path, options: dict | None = None) -> str:
     a("<li>Alignment check: near 20% and 60% of each delivered episode, a moving frame of the original was compared with the result frames around it (still scenes are skipped because they cannot tell frames apart). Offset 0 means the best match is the frame with the same number: nothing dropped, added or shifted.</li></ul>")
 
     a("""<h2>3. Episode by episode</h2>
-<p>Sharpness and edge figures are averages over 10 moments per episode, result divided by original (both at the result size). PSNR and ΔE compare the result, shrunk back to the original size, with the original: high PSNR and low ΔE mean nothing was moved or recoloured.</p>
-<div class="tablewrap tall"><table><thead><tr><th>Ep</th><th>Result</th><th>Model</th><th>Sharpness</th><th>Edges</th><th>PSNR back</th><th>ΔE back</th><th>Structure</th><th>Colour ΔE</th><th>Flicker</th><th>VMAF</th><th>Size (orig → new)</th><th>Min</th><th>Aligned</th><th>Guard</th></tr></thead><tbody>""")
+<p>Sharpness and edge figures are averages over 10 moments per episode, result divided by original (both at the result size). Flat area: how many points more of the area between the drawn lines is completely flat in the result than in a plain upscale of the original (texture smoothed away; near 0 is best). PSNR and ΔE compare the result, shrunk back to the original size, with the original: high PSNR and low ΔE mean nothing was moved or recoloured.</p>
+<div class="tablewrap tall"><table><thead><tr><th>Ep</th><th>Result</th><th>Model</th><th>Sharpness</th><th>Edges</th><th>Flat area</th><th>PSNR back</th><th>ΔE back</th><th>Structure</th><th>Colour ΔE</th><th>Flicker</th><th>VMAF</th><th>Size (orig → new)</th><th>Min</th><th>Aligned</th><th>Guard</th></tr></thead><tbody>""")
     for r in rows:
         if r["delivered"]:
             res = "<span class='pass'>delivered</span>"
@@ -362,12 +369,14 @@ def page(rows: list[dict], out: Path, options: dict | None = None) -> str:
         size = f"{r['orig'].get('mib', 0):.0f} → {r['rest']['mib']:.0f} MiB" if r["rest"] else f"{r['orig'].get('mib', 0):.0f} MiB"
         a(f"<tr><td class='num'><strong>{r['ep']}</strong></td><td>{res}</td><td>{_e(r['chosen'] or '—')}</td>"
           f"<td class='num'>{_fmt(r['sharp_x'], '.1f')}×</td><td class='num'>{_fmt(r['edge_x'], '.2f')}×</td>"
+          f"<td class='num'>{_fmt(r.get('flat_up') * 100 if r.get('flat_up') is not None else None, '+.0f')}</td>"
           f"<td class='num'>{_fmt(r['psnr'], '.1f')} dB</td><td class='num'>{_fmt(r['dE'], '.2f')}</td>"
           f"<td class='num'>{cell('backprojection', '.3f')}</td><td class='num'>{cell('color', '.2f')}</td>"
           f"<td class='num'>{cell('flicker', '+.4f')}</td><td class='num'>{cell('vmaf', '.1f')}</td>"
           f"<td class='num'>{size}</td><td class='num'>{_fmt(r['minutes'], '.0f')}</td><td class='num'>{al}</td>"
           f"<td>{'<a href=' + chr(39) + quote(r['report']) + chr(39) + '>page</a>' if r['report'] else '—'}</td></tr>")
     a(f"""</tbody><tfoot><tr><td>Avg</td><td>{len(done)}/{len(rows)}</td><td></td><td class='num'>{_fmt(agg('sharp_x'), '.1f')}×</td><td class='num'>{_fmt(agg('edge_x'), '.2f')}×</td>
+<td class='num'>{_fmt(agg('flat_up') * 100 if agg('flat_up') is not None else None, '+.0f')}</td>
 <td class='num'>{_fmt(agg('psnr'), '.1f')} dB</td><td class='num'>{_fmt(agg('dE'), '.2f')}</td><td class='num'>{_fmt(_mean(vals('backprojection')), '.3f')}</td>
 <td class='num'>{_fmt(_mean(vals('color')), '.2f')}</td><td class='num'>{_fmt(_mean(vals('flicker')), '+.4f')}</td><td class='num'>{_fmt(_mean(vals('vmaf')), '.1f')}</td>
 <td class='num'>{tot_o:.1f} → {tot_r:.1f} GiB</td><td class='num'>{hours:.1f} h</td><td>{len(aligned)}/{len(done)}</td><td></td></tr></tfoot></table></div>""")

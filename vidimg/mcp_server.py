@@ -135,7 +135,7 @@ def restore_photos(paths: list[str], out_dir: str | None = None, deblur: bool = 
 @mcp.tool()
 def restore_video(path: str, out_dir: str | None = None, preview_only: bool = False,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
-                  engine: str | None = None, mask_tape_noise: bool = False) -> dict:
+                  engine: str | None = None, mask_tape_noise: bool = False, texture: float | None = None) -> dict:
     """Start a background job restoring one video: analyse; classical field handling first when needed
     (QTGMC for interlace, TFM+TDecimate for telecine, chroma-shift correction, sRestore for blended fields
     from a standards conversion); open-model candidates on three guarded preview
@@ -153,7 +153,9 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     'mlrt' only when the person asks.
     mask_tape_noise: only when the person asks to hide VHS head-switching noise (analyze_media's tape_advice
     says when it was found): the bottom lines it covers are blacked out; the frame keeps its size.
-    Returns the job; poll job_status(job_id)."""
+    texture: source texture put back after the model, 0..1 (default 1). 0 only when the person wants the model's
+    clean, smooth look; lower values when returned compression noise bothers them. Returns the job; poll
+    job_status(job_id)."""
     src = _existing(path)
     if src.suffix.lower() not in VIDEO_EXT:
         raise ValueError(f"not a video: {src.name}")
@@ -164,9 +166,12 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
         raise ValueError(f"model must be one of {config.VIDEO_MODEL_CHOICES}")
     if engine is not None and engine not in config.VIDEO_ENGINE_CHOICES:
         raise ValueError(f"engine must be one of {config.VIDEO_ENGINE_CHOICES}")
+    if texture is not None and not 0 <= texture <= 1:
+        raise ValueError("texture must be between 0 and 1")
     args = ([str(src)] + (["--preview-only"] if preview_only else []) + (["--scale", f"{scale:g}"] if scale else [])
             + (["--content", content] if content != "auto" else []) + (["--model", model] if model else [])
-            + (["--engine", engine] if engine else []) + (["--mask-tape-noise"] if mask_tape_noise else []))
+            + (["--engine", engine] if engine else []) + (["--mask-tape-noise"] if mask_tape_noise else [])
+            + (["--texture", f"{texture:g}"] if texture is not None else []))
     return jobs.start("restore-video", args, out, src.name)
 
 
