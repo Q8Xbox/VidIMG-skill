@@ -197,14 +197,33 @@ class Repair:
         return [f'QTGMC(Preset="Slower", InputType={self.input_type}, Sharpness=0.0, TR2=1)']
 
 
-AvsStage = Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair
+@dataclass
+class SRestore:
+    """Blended fields/frames from a standards conversion -> the original pictures at the original rate.
+    sRestore picks, for each original picture, the least blended frame (bobbed fields for interlaced input);
+    it never synthesises pixels with these settings (omode=6, mode=2: measured, every output frame is a copy
+    of an input frame). VapourSynth only: the AviSynth+ script needs GRunT, which the pinned set lacks.
+    Runs as its own pass on progressive input (the source, or the double-rate QTGMC output)."""
+
+    frate: str = "24000/1001"              # target rate (exact fraction), chosen by trial on the video
+    in_fps: str = "50/1"                   # rate of the pass's input (set by the pipeline)
+
+    def rate(self) -> Fraction:
+        return Fraction(self.frate) / Fraction(self.in_fps)
+
+    def lines(self) -> list[str]:
+        raise NotImplementedError("sRestore runs in the VapourSynth backend only")
+
+
+AvsStage = Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | SRestore
 # processing order from the Doom9 consensus (04_doom9_practice.md 1.1). Deblock runs on the original
 # grid; for interlaced input, field handling comes first (Deblock_QED needs progressive frames).
-_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaDenoise: 3, Degrain: 4, Repair: 5}
+# Un-blending comes right after field handling: every later stage would smear the ghosts further.
+_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, SRestore: 2.2, ChromaDenoise: 3, Degrain: 4, Repair: 5}
 
 
 def order(stages: list[AvsStage]) -> list[AvsStage]:
-    field_stage = any(isinstance(s, (Deinterlace, IVTC)) for s in stages)
+    field_stage = any(isinstance(s, (Deinterlace, IVTC, SRestore)) for s in stages)
     key = dict(_ORDER)
     if field_stage:
         key[Deblock] = 2.5

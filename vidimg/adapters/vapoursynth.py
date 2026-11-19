@@ -26,8 +26,8 @@ VENV = config.TOOLS_DIR / "vs-venv"
 PYTHON = VENV / "Scripts" / "python.exe"
 PLUGINS = VENV / "Lib" / "site-packages" / "vapoursynth" / "plugins" / "vsrepo"
 RUNNER = Path(__file__).resolve().parents[1] / "vs_runner.py"
-SUPPORTED = (avs.Deinterlace, avs.IVTC)
-_KIND = {avs.Deinterlace: "deinterlace", avs.IVTC: "ivtc"}
+SUPPORTED = (avs.Deinterlace, avs.IVTC, avs.SRestore)
+_KIND = {avs.Deinterlace: "deinterlace", avs.IVTC: "ivtc", avs.SRestore: "srestore"}
 
 
 def available() -> tuple[bool, str]:
@@ -44,10 +44,42 @@ def supports(stages: list) -> bool:
     return all(isinstance(s, SUPPORTED) for s in stages)
 
 
-def spec(src: Path, stages: list, cache: Path, colour: dict, fps) -> dict:
-    return {"src": str(src), "cache": str(cache), "fps": [fps.numerator, fps.denominator],
-            "full_range": avs.is_full_range(colour), "plugins": str(PLUGINS),
-            "stages": [{"kind": _KIND[type(s)], **asdict(s)} for s in avs.order(stages)]}
+def spec(src: Path, stages: list, cache: Path, colour: dict, fps, trim: tuple[int, int] | None = None) -> dict:
+    sp = {"src": str(src), "cache": str(cache), "fps": [fps.numerator, fps.denominator],
+          "full_range": avs.is_full_range(colour), "plugins": str(PLUGINS),
+          "stages": [{"kind": _KIND[type(s)], **asdict(s)} for s in avs.order(stages)]}
+    if trim:
+        sp["trim"] = list(trim)
+    return sp
+
+
+def render_span(src: Path, dst: Path, stages: list, first: int, count: int, *, work: Path,
+                timeout: float = 900) -> AdapterResult:
+    """A short span through the stages, video only (FFV1 .mkv): trials such as choosing sRestore's rate."""
+    ok, why = available()
+    if not ok:
+        return AdapterResult(False, error=why)
+    src, dst = Path(src).resolve(), Path(dst).resolve()
+    safe_output_dir(dst.parent, src)
+    work.mkdir(parents=True, exist_ok=True)
+    fps, _, colour = avs._rate(src)
+    sp = spec(src, stages, work / (src.stem + ".vs.lwi"), colour, fps, trim=(first, count))
+    sp_path = work / (dst.stem + ".vs.json")
+    sp_path.write_text(json.dumps(sp, indent=1), encoding="utf-8")
+    log_path = work / (dst.stem + ".vs.log")
+    with open(log_path, "wb") as log_f:
+        worker = subprocess.Popen([str(PYTHON), "-I", str(RUNNER), str(sp_path)], stdout=subprocess.PIPE,
+                                  stderr=log_f, stdin=subprocess.DEVNULL)
+        r = proc.run("vapoursynth", [avs.system_ffmpeg(), "-hide_banner", "-nostdin", "-y", "-f", "yuv4mpegpipe",
+                                     "-i", "pipe:0", *avs.INTERMEDIATE, str(dst)],
+                     stdin_pipe=worker.stdout, timeout=timeout)
+        worker.stdout.close()
+        worker.wait()
+    if worker.returncode != 0 or r.returncode != 0 or not dst.exists():
+        werr = log_path.read_text(encoding="utf-8", errors="replace")
+        msg = next((ln for ln in reversed(werr.splitlines()) if ln.strip() and "autoloading failed" not in ln), None)
+        return AdapterResult(False, error=msg or f"ffmpeg exit {r.returncode}", run=r)
+    return AdapterResult(True, [dst], run=r)
 
 
 def render(src: Path, dst: Path, stages: list, *, work: Path | None = None, timeout: float | None = None,
@@ -56,7 +88,7 @@ def render(src: Path, dst: Path, stages: list, *, work: Path | None = None, time
     if not ok:
         return AdapterResult(False, error=why)
     if not supports(stages):
-        return AdapterResult(False, error="the VapourSynth backend implements field handling only")
+        return AdapterResult(False, error="the VapourSynth backend implements field handling and sRestore only")
     src, dst = Path(src).resolve(), Path(dst).resolve()
     if dst.suffix.lower() != ".nut":
         raise ValueError("the classical intermediate is FFV1 in .nut")

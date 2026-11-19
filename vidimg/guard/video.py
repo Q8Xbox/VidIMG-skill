@@ -290,3 +290,79 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
              "audio": "audio was dropped: map 0:a and copy it"}
     sugg = [SUGGEST.get(n) or extra.get(n) for n in failed]
     return GuardReport(not failed, gates, [s for s in sugg if s], bool(thresholds().get("calibrated")))
+
+
+# ----------------------------------------------------------------------------- un-blending (sRestore)
+DEBLEND_COPY_PSNR = 45.0        # dB on 8-bit luma at analysis size: a copied frame scores 48-108 (measured)
+DEBLEND_COPY_SHARE = 0.98       # share of sampled output frames that must be copies of input frames
+DEBLEND_SEARCH = 12             # input frames searched on each side of the time-aligned index (drift seen: -6..+11)
+
+
+def verify_deblend(src: Path, dst: Path, *, in_fps, out_fps, in_share: float, windows: int = 3,
+                   seconds: float = 4.0) -> GuardReport:
+    """sRestore output against its input. Structure as for any video (duration, audio, lip sync, shape,
+    frame count at the new rate); then the two things that make un-blending safe:
+    * selection: every sampled output frame is an exact copy of an input frame near the same time
+      (sRestore only chooses pictures; nothing is synthesised, so no identity or structure can change);
+    * blends: the share of blended frames must actually drop, otherwise the step is not worth keeping."""
+    from fractions import Fraction
+
+    from ..probe import blend
+
+    src, dst = Path(src), Path(dst)
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    fi, fo = Fraction(in_fps), Fraction(out_fps)
+    gates: list[Gate] = []
+    want = int(a["frames"] * fo / fi)
+    diff = abs(b["frames"] - want)
+    gates.append(Gate("frames", "pass" if diff <= max(2, want * 0.002) else "fail", b["frames"], want,
+                      f"output {b['frames']} vs {want} expected at {float(fo):.3f} fps"))
+    dd = abs(b["duration"] - a["duration"])
+    gates.append(Gate("duration", "pass" if dd <= max(VIDEO_THRESHOLDS["duration_tolerance_s"], 2 / float(fo)) else "fail",
+                      round(b["duration"], 3), round(a["duration"], 3), f"difference {dd:.3f}s"))
+    gates.append(Gate("audio", "pass" if b["audio_streams"] >= a["audio_streams"] else "fail", b["audio_streams"],
+                      a["audio_streams"], "audio streams kept"))
+    oa, ob = media.av_offset(a), media.av_offset(b)
+    if oa is not None and ob is not None:
+        tol = max(0.02, 0.5 / float(fo))
+        gates.append(Gate("av_sync", "pass" if abs(oa - ob) <= tol else "fail", round(ob - oa, 3), round(tol, 3),
+                          f"video-audio start offset {ob:+.3f} s vs source {oa:+.3f} s"))
+    da, db = media.display_aspect(a), media.display_aspect(b)
+    if da and db:
+        rel = db / da - 1
+        gates.append(Gate("aspect", "pass" if abs(rel) <= ASPECT_TOL else "fail", round(rel, 4), ASPECT_TOL,
+                          f"display aspect {db:.4f} vs source {da:.4f}"))
+
+    copies = judged = 0
+    worst = None
+    span = max(1.0, min(seconds, a["duration"] / max(1, windows) - 1))
+    for k in range(windows):
+        t = max(0.0, a["duration"] * (k + 0.5) / windows - span / 2)
+        pre = min(1.0, t)
+        outs = list(blend.read_gray(dst, t, span, width=180))
+        ins = list(blend.read_gray(src, t - pre, span + 2.0, width=180))
+        if not outs or not ins:
+            continue
+        for i, o in enumerate(outs):
+            j = round((i / fo + pre) * fi)
+            lo, hi = max(0, j - DEBLEND_SEARCH), min(len(ins), j + DEBLEND_SEARCH + 1)
+            if lo >= hi:
+                continue
+            o32 = o.astype(np.float32)
+            mse = min(float(np.mean((o32 - ins[m]) ** 2)) for m in range(lo, hi))
+            psnr = 10 * np.log10(255 ** 2 / max(mse, 1e-6))
+            judged += 1
+            copies += psnr >= DEBLEND_COPY_PSNR
+            worst = psnr if worst is None else min(worst, psnr)
+    share = copies / judged if judged else 0.0
+    gates.append(Gate("selection", "pass" if judged and share >= DEBLEND_COPY_SHARE else "fail", round(share, 4),
+                      DEBLEND_COPY_SHARE, f"{copies}/{judged} sampled output frames are copies of input frames "
+                      f"(worst {worst if worst is None else round(worst, 1)} dB)"))
+    out = blend.analyze(dst)
+    limit = max(0.05, 0.6 * in_share)
+    gates.append(Gate("blends", "pass" if out.share <= limit else "fail", out.share, round(limit, 3),
+                      f"blended frames {out.share:.1%} after vs {in_share:.1%} before"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"selection": "sRestore output is not made of input frames: keep the blended input",
+            "blends": "sRestore did not remove the blends at this rate: keep the blended input"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)

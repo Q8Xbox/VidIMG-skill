@@ -16,6 +16,7 @@ import json
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
+from fractions import Fraction
 from pathlib import Path
 from typing import Callable
 
@@ -25,7 +26,8 @@ from .adapters import free_sr, video2x
 from .adapters import vapoursynth as vsb
 from . import media
 from .adapters import AdapterResult, safe_output_dir
-from .guard.video import _ffmpeg, _frames_by_index, verify_video
+from .guard.video import _ffmpeg, _frames_by_index, verify_deblend, verify_video
+from .probe import blend as blend_probe
 from .probe import video as probe
 
 PREVIEW_SECONDS = 4.0
@@ -279,6 +281,12 @@ def run_chunked(base: Path, dst: Path, stages_fn: Callable[[], list], encoder: s
 def plan_prepass(p: probe.VideoProfile) -> tuple[list, str]:
     """AviSynth+ / VapourSynth stages that must run before any model (empty when none is needed)."""
     tff = p.field_order != "bff"
+    if "blended" in p.flags:
+        share = f"{p.blend_share:.0%} of moving {'fields' if 'interlaced' in p.flags else 'frames'} are blends"
+        if "interlaced" in p.flags:
+            return ([avs.Deinterlace(tff=tff, tr2=2 if "noisy" in p.flags else 1), avs.SRestore()],
+                    f"blended fields ({share}): QTGMC double rate, then sRestore back to the original rate")
+        return [avs.SRestore()], f"blended frames ({share}): sRestore back to the original rate"
     if "telecine" in p.flags:
         return [avs.IVTC(tff=tff)], f"telecine ({'TFF' if tff else 'BFF'}): IVTC with TFM+TDecimate"
     if "interlaced" in p.flags:
@@ -297,8 +305,152 @@ def _fallback_vf(p: probe.VideoProfile) -> tuple[str, float]:
     return f"bwdif=mode=send_field:parity={order}:deint=all", 2.0
 
 
+# ----------------------------------------------------------------------------- un-blending (sRestore)
+DEBLEND_RATES = (Fraction(24000, 1001), Fraction(25), Fraction(30000, 1001))
+DEBLEND_TIE = 0.03            # trial blend shares this close count as equal
+DEBLEND_HELD_TIE = 0.02       # a higher rate is kept only if it holds pictures at most this much more often:
+                              # one rate step above the original adds (r - r0) / r held pictures, 4.1 % for
+                              # 25 vs 23.976 (measured +3.0 points), 16.6 % for 29.97 vs 25 (measured +10.1)
+DEBLEND_TRIAL_SECONDS = 10.0
+DEBLEND_KEEP = 0.85           # the trial must cut the blend share at least this much (the guard then checks
+                              # the whole video: b001's trial spans happened to hold few blends, 12 % -> 9.5 %,
+                              # while the whole clip went 22 % -> 8 %)
+
+
+def deblend_rates(in_fps: Fraction) -> list[Fraction]:
+    """Original rates worth trying: below the input rate, and not below a fifth of it (sRestore's range)."""
+    return [r for r in DEBLEND_RATES if r < in_fps * Fraction(98, 100) and r * 5 >= in_fps]
+
+
+def pick_rate(shares: dict, held: dict | None = None) -> Fraction | None:
+    """Lowest blend share. Among rates within DEBLEND_TIE of it: the highest one that does not repeat pictures
+    more often than the others (a rate above the original holds pictures; one below drops real pictures,
+    which no blend measure sees, so of the rates that hold nothing extra the highest is the safe choice)."""
+    if not shares:
+        return None
+    best = min(shares.values())
+    tied = [r for r, v in shares.items() if v <= best + DEBLEND_TIE]
+    held = held or {}
+    floor = min((held.get(r, 0.0) for r in tied), default=0.0)
+    return max(r for r in tied if held.get(r, 0.0) <= floor + DEBLEND_HELD_TIE)
+
+
+def _trial_spans(duration: float, fps: Fraction) -> list[tuple[int, int]]:
+    count = round(min(DEBLEND_TRIAL_SECONDS, duration / 2) * fps)
+    starts = [0.0] if duration <= DEBLEND_TRIAL_SECONDS * 2.5 else [duration * 0.3, duration * 0.7]
+    return [(max(0, round(t * fps)), count) for t in starts]
+
+
+def choose_deblend_rate(base: Path, work: Path, log=print) -> dict:
+    """Run sRestore at each candidate rate on two short spans and measure what is left blended."""
+    in_fps = avs._rate(base)[0]
+    info = media.probe(base, exact=True)
+    rates = deblend_rates(in_fps)
+    out: dict = {"in_fps": str(in_fps), "rates": [str(r) for r in rates], "trials": {}}
+    if not rates:
+        out["error"] = f"no original rate below {float(in_fps):.3f} fps to restore"
+        return out
+    spans = _trial_spans(info["duration"], in_fps)
+    tdir = work / "deblend_trials"
+    tdir.mkdir(parents=True, exist_ok=True)
+    before = [list(blend_probe.read_gray(base, float(f / in_fps), float(n / in_fps))) for f, n in spans]
+    out["trial_input_share"] = blend_probe.summarize(before).share
+    shares: dict = {}
+    held: dict = {}
+    for r in rates:
+        wins = []
+        for k, (first, count) in enumerate(spans):
+            dst = tdir / f"r{float(r):.3f}_{k}.mkv"
+            res = vsb.render_span(base, dst, [avs.SRestore(frate=str(r), in_fps=str(in_fps))], first, count,
+                                  work=tdir)
+            if not res.ok:
+                out["trials"][str(r)] = {"error": res.error}
+                break
+            wins.append(list(blend_probe.read_gray(dst, 0, float(count / in_fps) + 1)))
+        else:
+            shares[r] = blend_probe.summarize(wins).share
+            held[r] = round(sum(blend_probe.held_share(w) * len(w) for w in wins) / max(1, sum(map(len, wins))), 3)
+            out["trials"][str(r)] = {"share": shares[r], "held": held[r]}
+            log(f"   sRestore trial at {float(r):.3f} fps: {shares[r]:.1%} blended, {held[r]:.1%} held "
+                f"(input {out['trial_input_share']:.1%} blended)")
+    best = pick_rate(shares, held)
+    out["chosen"] = str(best) if best else None
+    return out
+
+
+def run_deblend(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
+    """sRestore on a progressive input (the source, or the double-rate pre-pass). None when it was not done or
+    did not pass its guard: the caller keeps the blended input (still restorable, just not un-blended)."""
+    ddir = work / "deblend"                 # its own folder: an output folder may not hold the pass's input
+    dst, done = ddir / "deblend.nut", ddir / "deblend.done"
+    if dst.exists() and done.exists():
+        info = json.loads(done.read_text(encoding="utf-8"))
+        log(f"   sRestore: reusing the finished one ({info.get('fps_out')} fps)")
+        return dst, info | {"reused": True}
+    ok, why = vsb.available()
+    if not ok:
+        return None, {"skipped": f"VapourSynth not available ({why}); blended frames stay"}
+    trial = choose_deblend_rate(base, work, log)
+    info: dict = {"trial": trial}
+    rate = Fraction(trial["chosen"]) if trial.get("chosen") else None
+    in_share = trial.get("trial_input_share") or 0.0
+    if rate is None:
+        info["skipped"] = trial.get("error") or "no sRestore trial finished"
+        return None, info
+    left = trial["trials"][str(rate)]["share"]
+    if left > max(0.05, DEBLEND_KEEP * in_share):
+        info["skipped"] = f"sRestore left {left:.1%} blended (input {in_share:.1%}): not worth applying"
+        return None, info
+    in_fps = Fraction(trial["in_fps"])
+    stage = avs.SRestore(frate=str(rate), in_fps=str(in_fps))
+    ddir.mkdir(parents=True, exist_ok=True)
+    r = vsb.render(base, dst, [stage], work=ddir)
+    info.update(engine="vapoursynth", fps_in=str(in_fps), fps_out=str(rate), ok=r.ok, error=r.error,
+                frames=r.details.get("frames"))
+    if not r.ok:
+        info["skipped"] = f"sRestore failed: {r.error}"
+        return None, info
+    colour = media.colour_hint(base) or media.colour_hint(dst)
+    info["colour"] = media.write_colour_sidecar(dst, colour) if colour else {}
+    info["av_sync"] = media.fix_av_offset(base, dst)
+    info["aspect"] = media.fix_aspect(base, dst)
+    in_full = blend_probe.analyze(base).share
+    rep_ = verify_deblend(base, dst, in_fps=in_fps, out_fps=rate, in_share=in_full)
+    info["guard"] = {g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates}
+    info["guard_passed"] = rep_.passed
+    info["blend_share_before"] = in_full
+    info["blend_share_after"] = info["guard"].get("blends", {}).get("value")
+    log(f"   sRestore {float(in_fps):.3f} -> {float(rate):.3f} fps: guard "
+        f"{'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if not rep_.passed:
+        info["skipped"] = f"sRestore output failed its guard ({', '.join(rep_.failed())}): blended frames stay"
+        return None, info
+    done.write_text(json.dumps(info, default=str), encoding="utf-8")
+    return dst, info
+
+
 def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple[Path | None, dict]:
+    """Classical pre-pass: field handling (when planned), then un-blending (when planned). Returns the new base,
+    or None when field handling failed (the original then stays the deliverable)."""
     stages, why = plan_prepass(p)
+    field_stages = [s for s in stages if not isinstance(s, avs.SRestore)]
+    if field_stages:
+        base, info = _run_field_prepass(src, work, p, field_stages, why, log)
+    else:
+        base, info = src, {"plan": why}
+    if base is None:
+        return None, info
+    if any(isinstance(s, avs.SRestore) for s in stages):
+        un, info["deblend"] = run_deblend(base, work, log)
+        if un is not None:
+            base = un
+        else:
+            log(f"   sRestore not applied: {info['deblend'].get('skipped')}")
+    return base, info
+
+
+def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: list, why: str,
+                       log=print) -> tuple[Path | None, dict]:
     info: dict = {"plan": why}
     if not stages:
         return None, info
@@ -417,6 +569,13 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
             (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
             return rec
         base = pre                     # progressive; audio and metadata carried along
+        d = rec.prepass.get("deblend") or {}
+        if d.get("guard_passed"):
+            rec.notes.append(f"blended frames removed with sRestore: {float(Fraction(d['fps_in'])):.3f} -> "
+                             f"{float(Fraction(d['fps_out'])):.3f} fps (blends {d['blend_share_before']:.0%} -> "
+                             f"{d['blend_share_after']:.0%}); fewer frames, same duration and audio")
+        elif d.get("skipped"):
+            rec.notes.append(f"blended frames found but not removed: {d['skipped']}")
     saved = json.loads(choice_file.read_text(encoding="utf-8")) if choice_file.exists() else {}
     labels = [label for label, _ in cands]
     if saved.get("chosen") in labels and saved.get("options", options) == options and not preview_only:

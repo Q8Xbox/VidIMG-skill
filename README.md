@@ -28,7 +28,10 @@ open models and the WhatsApp video restored with RealESRNet: "all faces look rig
 - **Photos:** SCUNet denoise when noisy, then BSRNet → RealESRNet → SwinIR (non-GAN, most faithful first;
   on the owner's ground truth BSRNet scored true identity 0.811, +1.58 dB over bicubic). Anime/cartoons
   (no real face detected) go to Video2X's anime models.
-- **Video:** classical field handling first (QTGMC for interlace, TFM+TDecimate for telecine), then the
+- **Video:** classical field handling first (QTGMC for interlace, TFM+TDecimate for telecine). Blended
+  fields or frames from a standards conversion (NTSC↔PAL) are detected and un-blended with sRestore back to
+  the original frame rate; it only picks existing frames, and the guard checks that every output frame is
+  a copy of an input frame. Then the
   faithful RealESRNet / BSRNet when their estimated run fits in about 3 hours, otherwise Real-ESRGAN
   general-v3 (7.8 fps at 720p → 1080p). Long videos run in 2-minute chunks with context frames and
   boundaries on scene cuts, audio muxed once, resumable.

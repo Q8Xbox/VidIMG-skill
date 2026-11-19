@@ -11,6 +11,7 @@ Verified on the reference machine on 2026-11-16.
 | Video enhancement | RealESRNet / BSRNet when the run fits (~3 h estimate), otherwise Real-ESRGAN general-v3 |
 | Anime / cartoon | Video2X (Real-CUGAN, Real-ESRGAN anime-v3) |
 | Deinterlace / IVTC | QTGMC, TFM+TDecimate (AviSynth+ or VapourSynth); ffmpeg bwdif / fieldmatch as fallback |
+| Blended fields (NTSC↔PAL conversions) | sRestore (VapourSynth, havsfunc), evaluated frame by frame in order |
 | Frame interpolation (on request) | RIFE via Video2X |
 | Fidelity guard | OpenCV YuNet + SFace face models, FFmpeg libvmaf, scikit-image |
 
