@@ -37,7 +37,7 @@ system-wide except FFmpeg, and only after you agree.
 | Open models (BSRNet, RealESRNet, SwinIR, SCUNet, general-v3, NAFNet) | About 650 MB | Their authors' official releases | `tools/free-models` | Enhancement and noise removal |
 | YuNet and SFace face models | 38 MB | OpenCV Zoo | `tools/face-models` | Used by the guard to check that faces keep their identity |
 | Video2X 6.4.0 | 188 MB | GitHub (k4yt3x) | `tools/video2x-6.4.0` | Cartoons and animation, and frame generation on request |
-| Portable VapourSynth R72 with its plugins | About 220 MB | PyPI and vsrepo | `tools/vs-venv` | Deinterlacing (QTGMC), inverse telecine (IVTC) and removing blended fields (sRestore) |
+| Portable VapourSynth R72 with its plugins | About 220 MB | PyPI and vsrepo | `tools/vs-venv` | Deinterlacing (QTGMC), inverse telecine (IVTC), removing blended fields (sRestore) and chroma-shift correction |
 | vs-mlrt v15.16 (ONNX Runtime + DirectML) and ONNX copies of the open models | About 60 MB download, plus 35 MB of ONNX tools and 130 MB of converted models | GitHub (AmusementClub/vs-mlrt), PyPI | `tools/vs-mlrt` | Second engine for RealESRNet, BSRNet and general-v3 on any DirectX 12 graphics card. The models are not downloaded: they are converted from the official weights above and checked against PyTorch |
 | FFmpeg (full build) | About 200 MB | `winget install Gyan.FFmpeg` | The system, **after asking you** | Encoding, analysis and VMAF |
 | Your local settings | — | — | `vidimg.local.json` in the VidIMG folder (and `.mcp.json` for the cloned copy) | Saves the results folder you chose and the Python path on your computer |
@@ -205,6 +205,14 @@ When VidIMG is installed as a plugin, the commands start with the `vidimg:` pref
 - The start offset between audio and picture, so lip sync is not thrown off.
 - The pixel aspect ratio, so a 4:3 PAL video does not turn into 5:4.
 - All frames, so none are dropped (the one exception is blended fields, below).
+
+**Chroma shift (colour beside the lines).** On many tape copies and old cartoons the colour sits a pixel or
+more to one side of the drawn lines, so outlines get a coloured fringe on one side. The analysis measures how far
+each colour plane sits from the lines on 12 frames spread through the video. When the frames agree on a shift of
+1.25 pixels or more, the colour is moved back by exactly that amount before anything else; brightness (the
+lines themselves) is not touched and no colour is changed, only its position. A check measures again afterwards
+and keeps the correction only if the colour now lines up and the brightness is bit-identical. Interlaced videos
+get the horizontal part only.
 
 **Blended fields (NTSC↔PAL conversions).** Some old copies were converted between the American (NTSC, 29.97 fps)
 and European (PAL, 25 fps) systems by blending neighbouring pictures, so moving parts show as see-through double

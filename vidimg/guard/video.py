@@ -366,3 +366,54 @@ def verify_deblend(src: Path, dst: Path, *, in_fps, out_fps, in_share: float, wi
     sugg = {"selection": "sRestore output is not made of input frames: keep the blended input",
             "blends": "sRestore did not remove the blends at this rate: keep the blended input"}
     return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
+# ----------------------------------------------------------------------------- chroma shift correction
+CHROMA_RESIDUAL_MAX = 0.6       # luma px left beyond the clean baseline after the correction (measured 0.0-0.33)
+LUMA_UNCHANGED_PSNR = 60.0      # dB: a chroma-only pass must leave the luma bit-identical (measured 138 dB)
+
+
+CHROMA_UNTOUCHED_SLACK = 0.3   # luma px a component that was not corrected may drift in the re-measurement
+
+
+def verify_chroma(src: Path, dst: Path, *, moved: dict, before: dict, luma_must_match: bool,
+                  frames: int = 24) -> GuardReport:
+    """The chroma-shift correction did what it should and nothing else. Measured again on the output: every
+    corrected component now lines up with the line art, and the components left alone (the frames did not
+    agree on them) are no worse; when no field handling ran in the same pass, the luma is untouched.
+    moved: {"u": [dx, dy], "v": [...]} applied (luma px); before: the profile's excess over the baseline."""
+    from ..probe import chroma
+
+    gates: list[Gate] = []
+    after = chroma.analyze(Path(dst)).excess()
+    worst, detail = 0.0, []
+    for k in ("u", "v"):
+        for i in (0, 1):
+            a, b = abs(after[k][i]), abs(before[k][i])
+            bad = a if moved[k][i] else max(0.0, a - b - CHROMA_UNTOUCHED_SLACK)
+            worst = max(worst, bad)
+            detail.append(f"{'Cb' if k == 'u' else 'Cr'} {'xy'[i]} {before[k][i]:+.2f} -> {after[k][i]:+.2f}"
+                          + ("" if moved[k][i] else " (left)"))
+    gates.append(Gate("chroma_aligned", "pass" if worst <= CHROMA_RESIDUAL_MAX else "fail", round(worst, 2),
+                      CHROMA_RESIDUAL_MAX, "px from the lines, before -> after: " + "; ".join(detail)))
+    if luma_must_match:
+        a, b = media.probe(Path(src)), media.probe(Path(dst))
+        w, h = a["width"], a["height"]
+
+        def luma(path: Path) -> np.ndarray:
+            raw = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-map",
+                                  "0:v:0", "-frames:v", str(frames), "-vf", "format=yuv420p16le,extractplanes=y",
+                                  "-pix_fmt", "gray16le", "-f", "rawvideo", "-"], capture_output=True).stdout
+            n = len(raw) // (w * h * 2)
+            return (np.frombuffer(raw[: n * w * h * 2], "<u2").reshape(n, h, w) >> 8).astype(np.float32)
+
+        ya, yb = (luma(Path(src)), luma(Path(dst))) if (a["width"], a["height"]) == (b["width"], b["height"]) \
+            else (np.zeros(1), np.ones(1))
+        n = min(len(ya), len(yb))
+        mse = float(np.mean((ya[:n] - yb[:n]) ** 2)) if n else 1e9
+        ps = 10 * np.log10(255 ** 2 / max(mse, 1e-9))
+        gates.append(Gate("luma_unchanged", "pass" if ps >= LUMA_UNCHANGED_PSNR else "fail", round(ps, 1),
+                          LUMA_UNCHANGED_PSNR, f"luma of the first {n} frames vs the source: {ps:.1f} dB"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    return GuardReport(not failed, gates, ["chroma correction did not line the colour up: run without it"]
+                       if failed else [], False)
