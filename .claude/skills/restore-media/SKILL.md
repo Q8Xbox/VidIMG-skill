@@ -22,6 +22,7 @@ After setup the person restarts Claude Code (a cloned project also approves the 
 
 | Step | Tool | Notes |
 |---|---|---|
+| **Automatic flow (default)** | `survey_media(paths)` → `decide_plan(plan, decisions)` → `run_plan(plan)` | For any request: one file, many files, folders, a series, or a mix. See "Automatic flow" below. |
 | Check the setup | `doctor()` | First, if anything fails or on a new machine. |
 | Understand the file | `analyze_media(path)` | Profile + the plan the pipeline will follow. For videos it also returns `frames_sheet`: **look at it** to decide cartoon/anime vs real footage. |
 | Restore photos | `restore_photos(paths, out_dir?, deblur?)` | Background job → `job_status`. `deblur=true` only when the person asks for blur removal. |
@@ -41,7 +42,29 @@ The series command runs for hours (about 30 min per 24-min SD episode at x2): st
 Both video commands take `--engine auto|torch|mlrt` (MCP: `engine`): leave it on auto (PyTorch on NVIDIA, vs-mlrt / ONNX Runtime
 DirectML on AMD or Intel GPUs) unless the person asks.
 
-## Workflow
+## Automatic flow (use this by default)
+
+1. `survey_media(paths)` (background job → `job_status`). It finds every photo, single video and numbered series
+   (3+ numbered episodes in one folder) under the paths, analyses them, and returns a plan: one item per unit of
+   work (`photos`, `v1`, `v2`, …, `s1`, …), each with a decision already filled in (content, model from the model
+   guide, scale, texture) and its reasons, plus `contact_sheets`: all videos' frame sheets on a few labelled images.
+2. **Look at every contact sheet**, then send your corrections in ONE `decide_plan(plan, {...})` call. The analysis
+   often reads old cartoons as real footage, so confirm `content` for every video and series item, and change the
+   model when what you see calls for it (the item's `guide` gives the pick for either reading; realistic drawn
+   faces: `cugan-pro`). Add a short `reason`; it appears in the report. You decide; do not ask the person to choose.
+   Ask them only about opt-in steps they did not mention and the survey shows are relevant: `deblur` when photos
+   are soft, `mask_tape_noise` when `tape_advice` reports head-switching noise.
+3. Tell the person in a few lines what was found and what you decided and why, then `run_plan(plan)` (background
+   job → `job_status`; the result shows finished items while it runs). It runs the photo batch, every video and
+   every series through the guarded pipelines, and writes ONE combined report (`index.html`) linking the detailed
+   ones. A stopped run continues with `resume_job` or another `run_plan`: finished items are skipped.
+4. Report per item: delivered or original kept and why, guard warnings, the combined report's path. Ask the person
+   to look at the faces. Their visual verdict outranks the numbers.
+
+Shell equivalent: `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" auto <paths> [--out DIR]` (survey; add `--run` to run at
+once with the analysis' own decisions) and `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" run-plan --out DIR`.
+
+## Workflow with the single-file tools (one-off or special requests)
 
 1. `analyze_media` on each file (or a sample of a folder). For a video, open its `frames_sheet` image and decide
    whether it is a cartoon/anime or real footage: the automatic probe misses old compressed cartoons and takes drawn

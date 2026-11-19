@@ -1,6 +1,7 @@
 """VidIMG MCP server (stdio) for Claude Code: faithful restoration of personal photos and videos.
 
 Tools (PLAN.md section 4.1):
+  survey_media, decide_plan, run_plan (the automatic flow: any mix of photos, videos and series folders),
   doctor, analyze_media, restore_photos, restore_video, job_status, list_jobs, cancel_job, resume_job,
   verify_restoration, compare_frames
 Restorations run as background jobs (vidimg/jobs.py): the tool returns a job id at once and
@@ -37,8 +38,12 @@ mcp = FastMCP("vidimg", instructions=(
     "Faithful restoration of personal photos and videos with free tools only: open non-GAN models "
     "(BSRNet, RealESRNet, SwinIR, Real-ESRGAN general) on PyTorch CUDA, SCUNet denoising, Video2X for "
     "anime, and a classical AviSynth+/VapourSynth pre-pass, every result checked by a calibrated "
-    "fidelity guard (face identity, structure, colour, temporal). Typical flow: analyze_media -> "
-    "restore_photos / restore_video (background job) -> job_status until done -> show the report. "
+    "fidelity guard (face identity, structure, colour, temporal). Default flow for anything the person "
+    "gives you (one file, many files, folders, a series): survey_media -> job_status until done -> LOOK at "
+    "the contact sheets and correct the plan with decide_plan -> run_plan -> job_status until done -> show "
+    "the combined report. You make the decisions (content, model) from the analysis and what you see, and "
+    "say which and why; ask the person only about opt-in steps they did not mention. The single-file tools "
+    "(analyze_media, restore_photos, restore_video) remain for one-off or special requests. "
     "Never claim a result is faithful unless the guard passed it. Report to the person in English."))
 
 
@@ -79,6 +84,52 @@ def doctor() -> dict:
     rep["classical_engines"] = {"order": list(config.classical_engines()),
                                 "avisynth": avisynth.available(), "vapoursynth": vapoursynth.available()}
     return rep
+
+
+@mcp.tool()
+def survey_media(paths: list[str], out_dir: str | None = None) -> dict:
+    """START HERE for any restoration request. Background job: finds every photo, single video and numbered series
+    (3+ numbered episodes in one folder) under the given files/folders, analyses them, and writes a plan with a
+    decision already filled in per item (content, model from the model guide, scale, texture, reasons), plus
+    contact sheets: all videos' frame sheets on a few labelled images. Poll job_status(job_id); its result holds
+    the plan summary: items, contact_sheets and what to do next. Nothing is restored yet and nothing is written
+    next to the originals."""
+    files = [_existing(x) for x in paths]
+    if not files:
+        raise ValueError("no input")
+    out = _out_dir(out_dir, files, "auto")
+    label = "survey: " + ", ".join(f.name for f in files[:3]) + (f" (+{len(files) - 3})" if len(files) > 3 else "")
+    return jobs.start("survey", [str(f) for f in files], out, label)
+
+
+@mcp.tool()
+def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
+    """Correct a surveyed plan after LOOKING at its contact sheets (open each image): the analysis often reads
+    old cartoons as real footage, and you may know better which model fits. plan: the survey's output folder (or its
+    plan.json). decisions: {item_id: {...}} with any of
+      content 'anime' | 'real' | 'auto'   (changing it re-picks the model from the guide unless you give one)
+      model   esrgan-v3 | cugan | cugan-pro | general-v3 | realesrnet | bsrnet  (goes first; the approved order
+              follows if the guard rejects it), model_strict true only when the person insists on that model
+      scale (e.g. 2), texture 0..1 (source texture put back; default 1), mask_tape_noise (only if the person asks),
+      preview_only (single videos), deblur (photos item; only if the person asks for blur removal),
+      skip true, reason "why you decided this" (shown in the report).
+    Confirm every video item, even when the analysis was right ({"v1": {"content": "anime"}}). Returns the summary."""
+    from vidimg import auto
+    with _quiet():
+        return auto.summary(auto.decide(Path(plan).expanduser(), decisions))
+
+
+@mcp.tool()
+def run_plan(plan: str) -> dict:
+    """Background job: run (or continue) a surveyed plan: the photo batch, every video and every series, each
+    through its guarded pipeline with the plan's decisions, then ONE combined report (index.html) linking the
+    detailed ones. Resumable: finished items are skipped. plan: the survey's output folder. Poll job_status; while
+    it runs the result already shows which items are done. When finished, give the person the report path and a
+    short account of what was delivered, what kept its original and why."""
+    from vidimg import auto
+    p = auto.plan_path(Path(plan).expanduser())
+    out = Path(auto.load(p)["out"])
+    return jobs.start("run-plan", [], out, f"run plan: {out.name}")
 
 
 @mcp.tool()

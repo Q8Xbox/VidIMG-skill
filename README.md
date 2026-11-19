@@ -45,6 +45,10 @@ open models and the WhatsApp video restored with RealESRNet: "all faces look rig
   nothing invented, the lines stay as sharp as the model made them) and the result is encoded with x265's grain
   tune, because the hardware HEVC encoder flattened low-contrast texture by itself. The guard and the reports
   show the flat area between the lines against a plain upscale.
+- **Automatic flow:** `survey_media` → `decide_plan` → `run_plan` (CLI `auto`, `run-plan`): give it any mix of
+  photos, videos and series folders. It sorts and analyses everything, fills in a decision per item (content,
+  model, scale, texture) with reasons, and shows all videos on a few contact sheets so Claude confirms "drawn or
+  real" for every one by looking once. One resumable job then runs the whole plan and writes one combined report.
 - **Batches:** photos are processed in rounds; photos with identical settings share one model call
   (the model loads once) and every photo is checkpointed in `<out>/items/`.
 - **Guard:** face identity (SFace), face and overall structure, landmarks, eye colour, colour shift,
