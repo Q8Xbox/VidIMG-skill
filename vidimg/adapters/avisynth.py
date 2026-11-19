@@ -198,6 +198,31 @@ class Repair:
 
 
 @dataclass
+class ChromaShift:
+    """Move the colour planes back onto the line art (tape / old-cartoon chroma shift; probe/chroma.py).
+    Geometry only: each chroma plane is resampled (Spline36) by a sub-pixel offset; luma is untouched and
+    no colour value changes. Offsets are how far to MOVE each plane, in luma pixels (+ = right / down).
+    4:2:0 only (both engines work in YUV420P16 here); runs after field handling, on progressive frames."""
+
+    u_dx: float = 0.0
+    u_dy: float = 0.0
+    v_dx: float = 0.0
+    v_dy: float = 0.0
+
+    def rate(self) -> Fraction:
+        return Fraction(1)
+
+    def lines(self) -> list[str]:
+        # moving the picture right by m luma px = sampling from m/2 chroma px to the left (src_left = -m/2)
+        def plane(fn: str, dx: float, dy: float) -> str:
+            return (f"{fn}().Spline36Resize(__y.Width() / 2, __y.Height() / 2, src_left={-dx / 2 + 0.0:g}, "
+                    f"src_top={-dy / 2 + 0.0:g})")
+        return ["__y = last", f"__u = {plane('ExtractU', self.u_dx, self.u_dy)}",
+                f"__v = {plane('ExtractV', self.v_dx, self.v_dy)}",
+                'CombinePlanes(__y, __u, __v, planes="YUV", source_planes="YYY", sample_clip=__y)']
+
+
+@dataclass
 class SRestore:
     """Blended fields/frames from a standards conversion -> the original pictures at the original rate.
     sRestore picks, for each original picture, the least blended frame (bobbed fields for interlaced input);
@@ -215,11 +240,13 @@ class SRestore:
         raise NotImplementedError("sRestore runs in the VapourSynth backend only")
 
 
-AvsStage = Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | SRestore
+AvsStage = Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | SRestore
 # processing order from the Doom9 consensus (04_doom9_practice.md 1.1). Deblock runs on the original
 # grid; for interlaced input, field handling comes first (Deblock_QED needs progressive frames).
 # Un-blending comes right after field handling: every later stage would smear the ghosts further.
-_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, SRestore: 2.2, ChromaDenoise: 3, Degrain: 4, Repair: 5}
+# Chroma shift is corrected on progressive frames, right after field handling.
+_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, SRestore: 2.2, ChromaDenoise: 3, Degrain: 4,
+          Repair: 5}
 
 
 def order(stages: list[AvsStage]) -> list[AvsStage]:

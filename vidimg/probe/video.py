@@ -19,6 +19,7 @@ import numpy as np
 from .. import faces
 from .. import media
 from . import blend as blend_probe
+from . import chroma as chroma_probe
 from .image import anime_score, noise_sigma
 
 
@@ -42,6 +43,7 @@ class VideoProfile:
     repeated_field_ratio: float = 0.0     # idet repeated top+bottom fields: ~0.4 for hard 3:2 telecine
     blend_share: float = 0.0              # share of moving frames (bobbed fields when interlaced) that are blends
     blend: dict = field(default_factory=dict)   # probe.blend statistics (windows, weights, decision)
+    chroma: dict = field(default_factory=dict)  # probe.chroma: colour planes displaced from the luma
     noise_sigma: float = 0.0              # median over sampled frames
     faces_max: int = 0                    # most faces seen in one sampled frame
     face_min_height: int = 0
@@ -133,6 +135,12 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
         bl = blend_probe.analyze(path, interlaced=inter >= 0.3, field_order=order).to_dict()
     except Exception as e:  # noqa: BLE001  (an analysis aid; never fail the whole profile on it)
         bl = {"error": f"{type(e).__name__}: {e}"}
+    ch: dict = {}
+    if str(info.get("pix_fmt") or "").startswith(("yuv420", "yuvj420")):   # measured on 4:2:0 as stored
+        try:
+            ch = chroma_probe.analyze(path).to_dict()
+        except Exception as e:  # noqa: BLE001  (an analysis aid; never fail the whole profile on it)
+            ch = {"error": f"{type(e).__name__}: {e}"}
     frames = _sample_frames(path, info)
     face_counts, face_heights, sig = [], [], []
     for f in frames:
@@ -148,7 +156,7 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
         bits_per_pixel=(round(bitrate * 1000 / (info["width"] * info["height"] * info["fps"]), 4)
                         if bitrate and info["width"] and info["height"] and info["fps"] else None),
         interlaced_ratio=inter, field_order=order, repeated_field_ratio=repeated,
-        blend_share=float(bl.get("share") or 0.0), blend=bl,
+        blend_share=float(bl.get("share") or 0.0), blend=bl, chroma=ch,
         blockiness=_mean_metric(path, "blockdetect", r"block mean", span),
         blur=_mean_metric(path, "blurdetect", r"blur mean", span),
         scene_cuts=_scenes(path, span), duplicate_ratio=_duplicates(path, span, round(span * (info["fps"] or 0))),
@@ -166,7 +174,8 @@ def _flags(p: VideoProfile) -> list[str]:
     # blended fields/frames (standards conversion): un-blend first. A blend-converted interlaced source can
     # show telecine-like repeated fields (33 % on a synthetic NTSC film -> PAL clip), but IVTC cannot fix
     # blends, so it is handled as interlaced (double-rate QTGMC) followed by sRestore
-    if p.blend.get("is_blended"):
+    # conversions only produce 25 / 29.97 (50 / 59.94 fields): a 10 fps clip read 10 % "blends" at the threshold
+    if p.blend.get("is_blended") and (p.fps or 0) >= 20:
         f.append("blended")
         if p.interlaced_ratio >= 0.3:
             f.append("interlaced")
@@ -179,6 +188,8 @@ def _flags(p: VideoProfile) -> list[str]:
         f.append("telecine")
     elif p.interlaced_ratio >= 0.5:
         f.append("interlaced")
+    if p.chroma.get("is_shifted"):
+        f.append("chroma_shift")
     if (p.height or 0) <= 480:
         f.append("sd")
     # H.264-class codecs: < 0.04 bits/pixel shows visible compression (600 kbps 720p24 = 0.024);

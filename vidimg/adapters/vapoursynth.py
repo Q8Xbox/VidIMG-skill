@@ -26,8 +26,8 @@ VENV = config.TOOLS_DIR / "vs-venv"
 PYTHON = VENV / "Scripts" / "python.exe"
 PLUGINS = VENV / "Lib" / "site-packages" / "vapoursynth" / "plugins" / "vsrepo"
 RUNNER = Path(__file__).resolve().parents[1] / "vs_runner.py"
-SUPPORTED = (avs.Deinterlace, avs.IVTC, avs.SRestore)
-_KIND = {avs.Deinterlace: "deinterlace", avs.IVTC: "ivtc", avs.SRestore: "srestore"}
+SUPPORTED = (avs.Deinterlace, avs.IVTC, avs.ChromaShift, avs.SRestore)
+_KIND = {avs.Deinterlace: "deinterlace", avs.IVTC: "ivtc", avs.ChromaShift: "chroma", avs.SRestore: "srestore"}
 
 
 def available() -> tuple[bool, str]:
@@ -88,7 +88,7 @@ def render(src: Path, dst: Path, stages: list, *, work: Path | None = None, time
     if not ok:
         return AdapterResult(False, error=why)
     if not supports(stages):
-        return AdapterResult(False, error="the VapourSynth backend implements field handling and sRestore only")
+        return AdapterResult(False, error="the VapourSynth backend implements field handling, chroma shift and sRestore only")
     src, dst = Path(src).resolve(), Path(dst).resolve()
     if dst.suffix.lower() != ".nut":
         raise ValueError("the classical intermediate is FFV1 in .nut")

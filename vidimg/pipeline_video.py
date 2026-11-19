@@ -26,8 +26,9 @@ from .adapters import free_sr, video2x
 from .adapters import vapoursynth as vsb
 from . import media
 from .adapters import AdapterResult, safe_output_dir
-from .guard.video import _ffmpeg, _frames_by_index, verify_deblend, verify_video
+from .guard.video import _ffmpeg, _frames_by_index, verify_chroma, verify_deblend, verify_video
 from .probe import blend as blend_probe
+from .probe import chroma as chroma_probe
 from .probe import video as probe
 
 PREVIEW_SECONDS = 4.0
@@ -278,22 +279,65 @@ def run_chunked(base: Path, dst: Path, stages_fn: Callable[[], list], encoder: s
 
 
 # ----------------------------------------------------------------------------- classical pre-pass
+def chroma_stage(p: probe.VideoProfile) -> avs.ChromaShift | None:
+    """The chroma-shift correction the profile asks for (None when the colour is aligned). Interlaced and
+    telecined sources get the horizontal part only (measured on woven frames, a vertical shift mixes fields)."""
+    if "chroma_shift" not in p.flags or not p.chroma:
+        return None
+    st = chroma_probe.ChromaShift(u=tuple(p.chroma["u"]), v=tuple(p.chroma["v"]), spread=p.chroma.get("spread", 0.0),
+                                  spreads=p.chroma.get("spreads") or {}, frames=p.chroma.get("frames", 0))
+    c = st.correction(horizontal_only=bool({"interlaced", "telecine"} & set(p.flags)))
+    if not any(c["u"] + c["v"]):
+        return None
+    return avs.ChromaShift(u_dx=c["u"][0], u_dy=c["u"][1], v_dx=c["v"][0], v_dy=c["v"][1])
+
+
+def _describe_chroma(cs: avs.ChromaShift) -> str:
+    def d(dx: float, dy: float) -> str:
+        parts = ([f"{abs(dx):g} px {'right' if dx > 0 else 'left'}"] if dx else []) + \
+                ([f"{abs(dy):g} px {'down' if dy > 0 else 'up'}"] if dy else [])
+        return ", ".join(parts) or "unchanged"
+    return f"chroma shift: colour moved back onto the lines (Cb {d(cs.u_dx, cs.u_dy)} / Cr {d(cs.v_dx, cs.v_dy)})"
+
+
 def plan_prepass(p: probe.VideoProfile) -> tuple[list, str]:
     """AviSynth+ / VapourSynth stages that must run before any model (empty when none is needed)."""
     tff = p.field_order != "bff"
+    stages: list = []
+    why: list[str] = []
     if "blended" in p.flags:
         share = f"{p.blend_share:.0%} of moving {'fields' if 'interlaced' in p.flags else 'frames'} are blends"
         if "interlaced" in p.flags:
-            return ([avs.Deinterlace(tff=tff, tr2=2 if "noisy" in p.flags else 1), avs.SRestore()],
-                    f"blended fields ({share}): QTGMC double rate, then sRestore back to the original rate")
-        return [avs.SRestore()], f"blended frames ({share}): sRestore back to the original rate"
-    if "telecine" in p.flags:
-        return [avs.IVTC(tff=tff)], f"telecine ({'TFF' if tff else 'BFF'}): IVTC with TFM+TDecimate"
-    if "interlaced" in p.flags:
-        noisy = "noisy" in p.flags
-        return ([avs.Deinterlace(tff=tff, tr2=2 if noisy else 1)],
-                f"interlaced ({'TFF' if tff else 'BFF'}): QTGMC SourceMatch=3 Lossless=2, double rate")
-    return [], ""
+            stages.append(avs.Deinterlace(tff=tff, tr2=2 if "noisy" in p.flags else 1))
+            why.append(f"blended fields ({share}): QTGMC double rate, then sRestore back to the original rate")
+        else:
+            why.append(f"blended frames ({share}): sRestore back to the original rate")
+    elif "telecine" in p.flags:
+        stages.append(avs.IVTC(tff=tff))
+        why.append(f"telecine ({'TFF' if tff else 'BFF'}): IVTC with TFM+TDecimate")
+    elif "interlaced" in p.flags:
+        stages.append(avs.Deinterlace(tff=tff, tr2=2 if "noisy" in p.flags else 1))
+        why.append(f"interlaced ({'TFF' if tff else 'BFF'}): QTGMC SourceMatch=3 Lossless=2, double rate")
+    cs = chroma_stage(p)
+    if cs:
+        stages.append(cs)
+        why.append(_describe_chroma(cs))
+    if "blended" in p.flags:
+        stages.append(avs.SRestore())
+    return stages, "; ".join(why)
+
+
+def _has_field_stage(stages: list) -> bool:
+    return any(isinstance(s, (avs.Deinterlace, avs.IVTC)) for s in stages)
+
+
+def _fallback_chroma_vf(stages: list) -> str | None:
+    """ffmpeg's chromashift (whole chroma pixels only) for the no-engine fallback."""
+    cs = next((s for s in stages if isinstance(s, avs.ChromaShift)), None)
+    if cs is None:
+        return None
+    v = {k: round(x / 2) for k, x in (("cbh", cs.u_dx), ("cbv", cs.u_dy), ("crh", cs.v_dx), ("crv", cs.v_dy))}
+    return "chromashift=" + ":".join(f"{k}={x}" for k, x in v.items()) if any(v.values()) else None
 
 
 def _fallback_vf(p: probe.VideoProfile) -> tuple[str, float]:
@@ -436,6 +480,16 @@ def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print) -> tupl
     field_stages = [s for s in stages if not isinstance(s, avs.SRestore)]
     if field_stages:
         base, info = _run_field_prepass(src, work, p, field_stages, why, log)
+        if base is not None and any(isinstance(s, avs.ChromaShift) for s in field_stages) \
+                and not info.get("chroma_check", {}).get("passed", False):
+            # the colour did not line up: field handling alone (or the source as it is)
+            without = [s for s in field_stages if not isinstance(s, avs.ChromaShift)]
+            log("   chroma correction rejected by its check: continuing without it")
+            for f in ("prepass.nut", "prepass.done"):
+                (work / f).unlink(missing_ok=True)
+            note = info.get("chroma_check")
+            base, info = _run_field_prepass(src, work, p, without, why, log) if without else (src, {"plan": why})
+            info["chroma_check"] = note
     else:
         base, info = src, {"plan": why}
     if base is None:
@@ -477,9 +531,11 @@ def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: lis
             break
         tried.append(f"{name}: {r.error}")
     info["skipped"] = tried
+    has_field = _has_field_stage(stages)
     if not info.get("ok"):
         reason = "; ".join(tried)
-        vf, _ = _fallback_vf(p)
+        vf = ",".join(x for x in ((_fallback_vf(p)[0] if has_field else None), _fallback_chroma_vf(stages)) if x) \
+            or "null"
         colour = avs._rate(src)[2]
         if avs.is_full_range(colour):
             vf += ",scale=in_range=full:out_range=limited"
@@ -496,11 +552,18 @@ def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: lis
         return None, info
     info["av_sync"] = media.fix_av_offset(src, dst)
     info["aspect"] = media.fix_aspect(src, dst)
-    vf, rate = _fallback_vf(p)
+    vf, rate = _fallback_vf(p) if has_field else (None, 1.0)
     rep_ = verify_video(src, dst, src_vf=vf, src_rate=rate)
     info["guard"] = {g.name: {"status": g.status, "value": g.value} for g in rep_.gates}
     info["guard_passed"] = rep_.passed
     log(f"   pre-pass guard: {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if rep_.passed and any(isinstance(s, avs.ChromaShift) for s in stages):
+        cs = next(s for s in stages if isinstance(s, avs.ChromaShift))
+        ch = verify_chroma(src, dst, moved={"u": [cs.u_dx, cs.u_dy], "v": [cs.v_dx, cs.v_dy]},
+                           before=p.chroma.get("excess") or {"u": [0, 0], "v": [0, 0]}, luma_must_match=not has_field)
+        info["chroma_check"] = {"passed": ch.passed, "gates": {g.name: {"status": g.status, "value": g.value,
+                                                                         "detail": g.detail} for g in ch.gates}}
+        log(f"   chroma check: {'PASS' if ch.passed else 'FAIL ' + ','.join(ch.failed())}")
     if rep_.passed:
         done.write_text(json.dumps({k: v for k, v in info.items() if k != "script"}, default=str), encoding="utf-8")
     return (dst if rep_.passed else None), info
@@ -569,6 +632,12 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
             (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
             return rec
         base = pre                     # progressive; audio and metadata carried along
+        cc = rec.prepass.get("chroma_check") or {}
+        if cc.get("passed"):
+            rec.notes.append(next((w for w in str(rec.prepass.get("plan", "")).split("; ")
+                                   if w.startswith("chroma shift")), "chroma shift corrected"))
+        elif cc:
+            rec.notes.append("chroma shift found, but the correction did not pass its check: colour left as it was")
         d = rec.prepass.get("deblend") or {}
         if d.get("guard_passed"):
             rec.notes.append(f"blended frames removed with sRestore: {float(Fraction(d['fps_in'])):.3f} -> "

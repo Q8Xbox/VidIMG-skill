@@ -83,6 +83,14 @@ def build(spec: dict) -> tuple[vs.VideoNode, Fraction | None]:
                                   format=vs.YUV420P16)
             rate_num *= st["cycle"] - st["cycle_r"]
             rate_den *= st["cycle"]
+        elif k == "chroma":
+            # move each colour plane by (dx, dy) luma px: sample from -d / subsampling (Spline36, same size)
+            sw, sh = 1 << c.format.subsampling_w, 1 << c.format.subsampling_h
+            planes = [core.std.ShufflePlanes(c, i, vs.GRAY) for i in range(3)]
+            for i, (dx, dy) in ((1, (st["u_dx"], st["u_dy"])), (2, (st["v_dx"], st["v_dy"]))):
+                if dx or dy:
+                    planes[i] = core.resize.Spline36(planes[i], src_left=-dx / sw, src_top=-dy / sh)
+            c = core.std.ShufflePlanes(planes, [0, 0, 0], vs.YUV)
         elif k == "srestore":
             c = core.std.AssumeFPS(c, fpsnum=rate_num, fpsden=rate_den)
             linear = Fraction(st["frate"])
