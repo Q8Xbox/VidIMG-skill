@@ -20,6 +20,7 @@ from .. import faces
 from .. import media
 from . import blend as blend_probe
 from . import chroma as chroma_probe
+from . import tape as tape_probe
 from .image import anime_score, noise_sigma
 
 
@@ -44,6 +45,7 @@ class VideoProfile:
     blend_share: float = 0.0              # share of moving frames (bobbed fields when interlaced) that are blends
     blend: dict = field(default_factory=dict)   # probe.blend statistics (windows, weights, decision)
     chroma: dict = field(default_factory=dict)  # probe.chroma: colour planes displaced from the luma
+    tape: dict = field(default_factory=dict)    # probe.tape: head switching, flagging, clipped highlights
     noise_sigma: float = 0.0              # median over sampled frames
     faces_max: int = 0                    # most faces seen in one sampled frame
     face_min_height: int = 0
@@ -141,6 +143,10 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
             ch = chroma_probe.analyze(path).to_dict()
         except Exception as e:  # noqa: BLE001  (an analysis aid; never fail the whole profile on it)
             ch = {"error": f"{type(e).__name__}: {e}"}
+    try:       # tape defects software cannot repair: head switching, flagging, clipped highlights (probe/tape.py)
+        tp = tape_probe.analyze(path).to_dict()
+    except Exception as e:  # noqa: BLE001  (an analysis aid; never fail the whole profile on it)
+        tp = {"error": f"{type(e).__name__}: {e}"}
     frames = _sample_frames(path, info)
     face_counts, face_heights, sig = [], [], []
     for f in frames:
@@ -156,7 +162,7 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
         bits_per_pixel=(round(bitrate * 1000 / (info["width"] * info["height"] * info["fps"]), 4)
                         if bitrate and info["width"] and info["height"] and info["fps"] else None),
         interlaced_ratio=inter, field_order=order, repeated_field_ratio=repeated,
-        blend_share=float(bl.get("share") or 0.0), blend=bl, chroma=ch,
+        blend_share=float(bl.get("share") or 0.0), blend=bl, chroma=ch, tape=tp,
         blockiness=_mean_metric(path, "blockdetect", r"block mean", span),
         blur=_mean_metric(path, "blurdetect", r"blur mean", span),
         scene_cuts=_scenes(path, span), duplicate_ratio=_duplicates(path, span, round(span * (info["fps"] or 0))),
@@ -190,6 +196,11 @@ def _flags(p: VideoProfile) -> list[str]:
         f.append("interlaced")
     if p.chroma.get("is_shifted"):
         f.append("chroma_shift")
+    # tape defects: reported (head switching can be masked on request); flagging and clipping are beyond repair
+    for key, flag in (("head_switching", "head_switching"), ("flagging", "top_flagging"),
+                      ("clipped", "clipped_highlights")):
+        if p.tape.get(key):
+            f.append(flag)
     if (p.height or 0) <= 480:
         f.append("sd")
     # H.264-class codecs: < 0.04 bits/pixel shows visible compression (600 kbps 720p24 = 0.024);

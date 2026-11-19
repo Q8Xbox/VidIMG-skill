@@ -417,3 +417,38 @@ def verify_chroma(src: Path, dst: Path, *, moved: dict, before: dict, luma_must_
     failed = [g.name for g in gates if g.status == "fail"]
     return GuardReport(not failed, gates, ["chroma correction did not line the colour up: run without it"]
                        if failed else [], False)
+
+
+# ----------------------------------------------------------------------------- bottom mask (head switching)
+MASK_BLACK_TOL = 2.0            # 8-bit levels around limited black (16) for the masked rows
+
+
+def verify_mask(src: Path, dst: Path, *, rows: int, luma_must_match: bool, frames: int = 24) -> GuardReport:
+    """The head-switching mask did exactly that: the bottom `rows` rows are black and, when no field handling
+    ran in the same pass, every row above them is bit-identical to the source."""
+    a, b = media.probe(Path(src)), media.probe(Path(dst))
+    gates: list[Gate] = []
+
+    def luma(path: Path, w: int, h: int) -> np.ndarray:
+        raw = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-map", "0:v:0",
+                              "-frames:v", str(frames), "-vf", "format=yuv420p16le,extractplanes=y", "-pix_fmt",
+                              "gray16le", "-f", "rawvideo", "-"], capture_output=True).stdout
+        n = len(raw) // (w * h * 2)
+        return (np.frombuffer(raw[: n * w * h * 2], "<u2").reshape(n, h, w) >> 8).astype(np.float32)
+
+    yb = luma(Path(dst), b["width"], b["height"])
+    band = yb[:, -rows:] if len(yb) else np.full((1, 1, 1), 255.0)
+    off = float(np.max(np.abs(band - 16))) if band.size else 255.0
+    gates.append(Gate("mask_black", "pass" if off <= MASK_BLACK_TOL else "fail", round(off, 1), MASK_BLACK_TOL,
+                      f"bottom {rows} rows: largest distance from black {off:.1f} levels"))
+    if luma_must_match:
+        same_size = (a["width"], a["height"]) == (b["width"], b["height"])
+        ya = luma(Path(src), a["width"], a["height"]) if same_size else np.zeros(0)
+        n = min(len(ya), len(yb))
+        mse = float(np.mean((ya[:n, :-rows] - yb[:n, :-rows]) ** 2)) if n and same_size else 1e9
+        ps = 10 * np.log10(255 ** 2 / max(mse, 1e-9))
+        gates.append(Gate("above_unchanged", "pass" if ps >= LUMA_UNCHANGED_PSNR else "fail", round(ps, 1),
+                          LUMA_UNCHANGED_PSNR, f"rows above the mask vs the source: {ps:.1f} dB"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    return GuardReport(not failed, gates, ["the bottom mask did not come out as planned: run without it"]
+                       if failed else [], False)

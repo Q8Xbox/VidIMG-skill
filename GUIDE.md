@@ -214,6 +214,26 @@ lines themselves) is not touched and no colour is changed, only its position. A 
 and keeps the correction only if the colour now lines up and the brightness is bit-identical. Interlaced videos
 get the horizontal part only.
 
+**Tape defects (VHS and other analogue captures).** The analysis also looks for three problems that come from
+the tape or the capture and that no software can undo, and the report says so in plain words:
+- **Head-switching noise:** a few lines at the very bottom of the picture that are shifted sideways and noisy.
+  The tool leaves them as they are unless you ask to hide them (`--mask-tape-noise`, or "mask the tape noise"
+  in Claude Code); then those lines are made black. The frame keeps its size, and a check makes sure only those
+  lines changed.
+- **Flagging:** the top of the picture bends sideways and wobbles. This is a timing error from the tape; it can
+  only be fixed by capturing again (see below).
+- **Clipped highlights:** bright areas that are flat white because the capture's brightness was too high. The
+  detail there is gone.
+
+**Capturing tapes well (before VidIMG).** The best restoration starts with the best capture:
+- Use a good standalone VCR, not a VCR/DVD combo unit, and pass the signal through a **line time-base corrector
+  (TBC)**, for example a Panasonic DMR-ES10 or ES15 DVD recorder used as a pass-through. This removes flagging
+  and wobble, which no software can do afterwards.
+- Capture **losslessly** (HuffYUV or Lagarith video, PCM audio) at the tape's own size, interlaced, without any
+  filters; let VidIMG do the deinterlacing.
+- Set the capture's brightness and contrast so that whites are not flattened; clipped highlights cannot be
+  brought back.
+
 **Blended fields (NTSC↔PAL conversions).** Some old copies were converted between the American (NTSC, 29.97 fps)
 and European (PAL, 25 fps) systems by blending neighbouring pictures, so moving parts show as see-through double
 images ("ghosts"). No filter or model can fix those frames: they would only sharpen the ghosts. The analysis
@@ -298,6 +318,7 @@ pick one yourself, add `--engine torch` or `--engine mlrt`.
 
 ```bash
 python -m vidimg restore-video "D:/Videos/wedding.avi" --content real --engine mlrt
+python -m vidimg restore-video "D:/Videos/holiday_vhs.avi" --content real --mask-tape-noise
 ```
 
 To do a whole series (or part of one) in one go, point `restore-series` at the folder. The episode number is

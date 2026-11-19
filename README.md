@@ -33,7 +33,10 @@ open models and the WhatsApp video restored with RealESRNet: "all faces look rig
   the original frame rate; it only picks existing frames, and the guard checks that every output frame is
   a copy of an input frame. Colour displaced from the line art (chroma shift, common on tape copies) is
   measured and moved back by sub-pixel resampling of the colour planes only; a check re-measures it and
-  requires the luma to stay bit-identical. Then the
+  requires the luma to stay bit-identical. Tape defects software cannot repair are reported in plain words:
+  VHS head-switching noise in the bottom lines (blacked out only on request, `--mask-tape-noise`), the top
+  of the picture bending sideways ("flagging", which needs a line time-base corrector during capture) and
+  clipped highlights. Then the
   faithful RealESRNet / BSRNet when their estimated run fits in about 3 hours, otherwise Real-ESRGAN
   general-v3 (7.8 fps at 720p → 1080p). Long videos run in 2-minute chunks with context frames and
   boundaries on scene cuts, audio muxed once, resumable.

@@ -26,8 +26,9 @@ VENV = config.TOOLS_DIR / "vs-venv"
 PYTHON = VENV / "Scripts" / "python.exe"
 PLUGINS = VENV / "Lib" / "site-packages" / "vapoursynth" / "plugins" / "vsrepo"
 RUNNER = Path(__file__).resolve().parents[1] / "vs_runner.py"
-SUPPORTED = (avs.Deinterlace, avs.IVTC, avs.ChromaShift, avs.SRestore)
-_KIND = {avs.Deinterlace: "deinterlace", avs.IVTC: "ivtc", avs.ChromaShift: "chroma", avs.SRestore: "srestore"}
+SUPPORTED = (avs.Deinterlace, avs.IVTC, avs.ChromaShift, avs.MaskBottom, avs.SRestore)
+_KIND = {avs.Deinterlace: "deinterlace", avs.IVTC: "ivtc", avs.ChromaShift: "chroma", avs.MaskBottom: "mask",
+         avs.SRestore: "srestore"}
 
 
 def available() -> tuple[bool, str]:

@@ -59,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     rvv.add_argument("--engine", default=None, choices=config.VIDEO_ENGINE_CHOICES,
                      help="engine for RealESRNet/BSRNet/general-v3: auto (PyTorch where CUDA works, else vs-mlrt), "
                           "torch, or mlrt (ONNX Runtime DirectML, any DirectX 12 GPU)")
+    rvv.add_argument("--mask-tape-noise", action="store_true",
+                     help="opt-in: black out VHS head-switching noise found in the bottom lines")
 
     rs = sub.add_parser("restore-series",
                         help="restore numbered episodes of one folder into ONE folder + one series comparison report")
@@ -71,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
     rs.add_argument("--model", default=None, choices=config.VIDEO_MODEL_CHOICES)
     rs.add_argument("--encoder", default="hevc10", choices=sorted(media.ENCODERS))
     rs.add_argument("--engine", default=None, choices=config.VIDEO_ENGINE_CHOICES)
+    rs.add_argument("--mask-tape-noise", action="store_true",
+                    help="opt-in: black out VHS head-switching noise found in the bottom lines")
     rs.add_argument("--report-only", action="store_true", help="only rebuild the series report of OUT")
 
     an = sub.add_parser("analyze", help="measured degradation profile of an image or video")
@@ -128,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
 
         rec = pipeline_video.restore_video(a.video, out, preview_only=a.preview_only, encoder=a.encoder,
                                            on_progress=progress, scale=a.scale, content=a.content,
-                                           model=a.model)
+                                           model=a.model, mask_tape_noise=a.mask_tape_noise)
         print()
         out.mkdir(parents=True, exist_ok=True)
         (out / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, ensure_ascii=False, default=str),
@@ -152,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"report: {series_report.write(a.out or series.default_out_dir(a.folder, episodes, a.scale))}")
                 return 0
             status = series.restore_series(a.folder, a.out, wanted, scale=a.scale, content=a.content,
-                                           model=a.model, encoder=a.encoder,
+                                           model=a.model, encoder=a.encoder, mask_tape_noise=a.mask_tape_noise,
                                            log=lambda m: print(time.strftime("%H:%M:%S"), m, flush=True))
         except (ValueError, FileNotFoundError) as e:
             print(f"error: {e}")
