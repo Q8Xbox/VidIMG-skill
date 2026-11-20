@@ -36,6 +36,10 @@ def available() -> tuple[bool, str]:
         return False, "VapourSynth environment missing: run python -m vidimg.vs_install"
     if not (PLUGINS / "libmvtools.dll").exists():
         return False, "VapourSynth plugins missing: run python -m vidimg.vs_install"
+    from .. import vs_install
+    if vs_install.VIOLATION.exists():
+        return False, ("VapourSynth files changed since the first install (tools/vapoursynth/lock_violation.json): "
+                       "run python -m vidimg.vs_install to check again, or --relock after a deliberate update")
     if not avs.system_ffmpeg():
         return False, "no ffmpeg on PATH"
     return True, "ok"

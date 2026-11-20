@@ -4,4 +4,4 @@ AviSynth+/VapourSynth, FFmpeg).
 See PLAN.md for the design and research/ for the evidence behind every default.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
