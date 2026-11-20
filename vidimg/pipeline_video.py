@@ -351,8 +351,15 @@ def run_chunked(base: Path, dst: Path, stages_fn: Callable[[], list], encoder: s
                 on_progress: Callable[[int, int], None] | None = None, log=print) -> AdapterResult:
     """Render `base` in chunks with context frames on both sides (trimmed exactly), skip chunks already
     done (resume), join them losslessly and mux audio + metadata from `base` in one step."""
-    info = media.probe(base)
-    fps, dur = info["fps"], info["duration"]
+    # exact: frames counted and the rate as a fraction. The container's duration can be longer than the video
+    # (audio or subtitles that run on), which planned a last chunk past the end: it failed after hours
+    info = media.probe(base, exact=True)
+    rate = avs._rate(base)[0]
+    fps = float(rate) if rate else info["fps"]
+    n_frames = info["frames"]
+    dur = n_frames / fps if n_frames and fps else info["duration"]
+    # where the video's first frame sits on the file's clock (it may start after the audio): seeks are on that clock
+    v0 = max(0.0, (info.get("video_start") or 0.0) - min(info.get("video_start") or 0.0, info.get("audio_start") or 0.0))
     cdir = work / "chunks"
     cdir.mkdir(parents=True, exist_ok=True)
     # chunks are reused only when the same input, model, scale and encoder made them: a rerun with another model
@@ -377,26 +384,43 @@ def run_chunked(base: Path, dst: Path, stages_fn: Callable[[], list], encoder: s
         plan_file.write_text(json.dumps(plan), encoding="utf-8")
     on_cut = sum(1 for st, _ in plan[1:] if any(abs(st - c) < 1e-3 for c in cuts))
     log(f"   {len(plan)} chunks; {on_cut} of {max(0, len(plan) - 1)} boundaries on scene cuts")
-    total = info["frames"] or round(dur * fps)
+    total = n_frames or round(dur * fps)
+
+    def frame_at(t: float) -> int:
+        return max(0, min(total, round(t * fps)))
+
     done_frames = 0
     parts = []
     for i, (start, length) in enumerate(plan):
         part, marker = cdir / f"c{i:04d}.mp4", cdir / f"c{i:04d}.done"
-        frames_want = round((start + length) * fps) - round(start * fps)
+        # everything in frame numbers. first..last are this chunk's frames, lead is where decoding starts (context)
+        first = frame_at(start)
+        last = total if i == len(plan) - 1 else frame_at(start + length)
+        frames_want = last - first
         parts.append(part)
         if marker.exists() and part.exists():
             done_frames += frames_want
             continue
+        if frames_want <= 0:
+            parts.pop()                                    # a plan made for a longer duration: nothing left here
+            continue
         pre = min(CHUNK_CONTEXT_SECONDS, start)
-        post = min(CHUNK_CONTEXT_SECONDS, dur - (start + length))
-        skip = round(start * fps) - round((start - pre) * fps)
+        post = max(0.0, min(CHUNK_CONTEXT_SECONDS, dur - (start + length)))
+        lead = frame_at(start - pre)
+        skip = first - lead
+        # seek to half a frame BEFORE frame `lead`: the decoder starts at the first frame at or after the seek time,
+        # so a seek exactly on a frame time landed on that frame or the next one depending on rounding
+        # (29.97 fps: 119 s is frame 3566.43, decoding began at 3567 while the trim assumed 3566; one frame was
+        # lost at the join and one repeated)
+        seek = v0 + (lead - 0.5) / fps if lead > 0 else 0.0
+        span = (last - lead + 1) / fps + post
         trim = f"trim=start_frame={skip}:end_frame={skip + frames_want},setpts=PTS-STARTPTS"
 
         def prog(n: int, _t: int, base_n=done_frames) -> None:
             if on_progress:
                 on_progress(base_n + max(0, n - skip), total)
 
-        r = run_engine(base, part, stages_fn(), encoder, start=start - pre, duration=length + pre + post,
+        r = run_engine(base, part, stages_fn(), encoder, start=seek, duration=span,
                          audio=False, post_vf=trim, expected_frames=frames_want, on_progress=prog)
         if not r.ok:
             return AdapterResult(False, error=f"chunk {i + 1}/{len(plan)}: {r.error}", run=r.run)

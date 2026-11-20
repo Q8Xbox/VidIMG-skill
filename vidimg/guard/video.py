@@ -172,6 +172,24 @@ FLICKER_PAIR_FACTOR = 2.0       # a sampled pair "boils" when it adds more than 
 FLICKER_PAIR_SHARE = 0.25       # this share of boiling pairs fails the video whatever the median says
 
 
+TIMING_MIN_S = 0.04             # a frame may be shown this much earlier or later than in the source ...
+TIMING_FRAMES = 1.5             # ... or this many frame durations, whichever is larger
+
+
+def _frame_times(path: Path) -> list[float]:
+    """Presentation time of every video frame, in display order (packets only: nothing is decoded)."""
+    out = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time",
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True, encoding="utf-8",
+                         errors="replace", stdin=subprocess.DEVNULL).stdout.split()
+    vals = []
+    for x in out:
+        try:
+            vals.append(float(x.split(",")[0]))
+        except ValueError:
+            pass
+    return sorted(vals)
+
+
 def plan_samples(duration: float) -> int:
     """Sampled frame pairs for a video of this length: 6 for clips (as calibrated), one per minute beyond that."""
     return int(max(SAMPLES_MIN, min(SAMPLES_MAX, np.ceil(duration / SAMPLE_EVERY_S))))
@@ -230,6 +248,18 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
         tol = max(0.02, 0.5 / (b["fps"] or 25))
         gates.append(Gate("av_sync", "pass" if abs(oa - ob) <= tol else "fail", round(ob - oa, 3), round(tol, 3),
                           f"video-audio start offset {ob:+.3f} s vs source {oa:+.3f} s"))
+    # timing: frame i must be shown when the source showed it. A variable-rate source (phone clips) written at a
+    # constant rate keeps its frame count, duration and start, so nothing above notices, while picture and sound
+    # drift apart in the middle. Advisory: the limit is not calibrated on footage
+    if not interpolated and src_vf is None and src_rate == 1.0:
+        ta, tb = _frame_times(src), _frame_times(dst)
+        m = min(len(ta), len(tb))
+        if m >= 2:
+            drift = max(abs((y - tb[0]) - (x - ta[0])) for x, y in zip(ta[:m], tb[:m]))
+            limit = max(TIMING_MIN_S, TIMING_FRAMES / (a["fps"] or 25))
+            gates.append(Gate("timing", "pass" if drift <= limit else "warn", round(drift, 3), round(limit, 3),
+                              f"largest difference between a frame's time in the output and in the source: {drift:.3f} s"
+                              + ("" if drift <= limit else " (variable frame rate written as constant? sound drifts)")))
     # geometry: the picture must keep its on-screen shape (storage size x pixel aspect). A lost pixel aspect
     # squeezed every face by 6.7 % on PAL 16:15 sources and nothing else noticed (frames are compared resized)
     da, db = media.display_aspect(a), media.display_aspect(b)

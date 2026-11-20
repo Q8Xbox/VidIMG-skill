@@ -3,6 +3,7 @@ result does not stay under the deliverable's name. No engines, GPU or FFmpeg."""
 
 import json
 import sys
+from fractions import Fraction
 import time
 from pathlib import Path
 
@@ -30,6 +31,7 @@ def _chunk_env(monkeypatch, tmp_path, rendered: list):
     monkeypatch.setattr(pv.media, "fix_aspect", lambda a, b: None)
     monkeypatch.setattr(pv.media, "colour_hint", lambda p: {})
     monkeypatch.setattr(pv, "scene_cuts", lambda b, w, log=print: [])
+    monkeypatch.setattr(pv.avs, "_rate", lambda p: (Fraction(25), 0, {}))
     monkeypatch.setattr(pv, "_ffmpeg", lambda: "ffmpeg")
 
     def engine(src, dst, stages, encoder, **kw):
@@ -150,3 +152,59 @@ def test_a_silent_program_is_stopped(monkeypatch, tmp_path):
 
 def test_free_engine_has_a_stall_limit():
     assert 600 <= free_sr.STALL_SECONDS <= 3600
+
+
+def test_chunks_are_cut_on_exact_frames(tmp_path, monkeypatch):
+    """29.97 fps: every chunk starts on the frame the previous one stopped at, the seek lands between two frames,
+    and a plan made for a longer duration (audio that runs on) stops at the last real frame."""
+    calls: list = []
+    base = _chunk_env(monkeypatch, tmp_path, [])
+    fps = Fraction(30000, 1001)
+    total = 8000                                             # 266.9 s of video ...
+    info = {"fps": 29.97, "duration": 300.0, "frames": total, "audio_streams": 0,        # ... in a 300 s container
+            "video_start": 0.2, "audio_start": 0.0}
+    monkeypatch.setattr(pv.media, "probe", lambda p, exact=False: dict(info))
+    monkeypatch.setattr(pv.avs, "_rate", lambda p: (fps, 0, {}))
+
+    def engine(src, dst, stages, encoder, **kw):
+        calls.append(kw)
+        dst.write_bytes(b"x")
+        return AdapterResult(True, [dst])
+
+    monkeypatch.setattr(pv, "run_engine", engine)
+    dst = tmp_path / "out" / "o.mkv"
+    dst.parent.mkdir()
+    r = pv.run_chunked(base, dst, lambda: [_Stage("m")], "hevc10", tmp_path / "work", log=lambda *_: None)
+    assert r.error is None or "joined frame count" in r.error            # the stubbed join has no real frames
+    assert sum(c["expected_frames"] for c in calls) == total
+    first = 0
+    for c in calls:
+        skip, end = (int(x) for x in __import__("re").findall(r"(?:start|end)_frame=(\d+)", c["post_vf"]))
+        assert end - skip == c["expected_frames"]
+        lead = first - skip                                  # the frame decoding starts at
+        want = 0.0 if lead == 0 else 0.2 + (lead - 0.5) / float(fps)     # half a frame before it, on the file's clock
+        assert abs(c["start"] - want) < 1e-9
+        first += c["expected_frames"]
+    assert first == total and len(calls) == 2                # planned on 266.9 s of video, not the 300 s container
+
+
+def test_frame_times_that_moved_are_reported(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from vidimg.guard import video as gv
+
+    info = {"frames": 4, "duration": 0.16, "audio_streams": 0, "fps": 25.0, "width": 96, "height": 72, "sar": "1:1"}
+    monkeypatch.setattr(gv.media, "probe", lambda p, exact=False: dict(info))
+    monkeypatch.setattr(gv.media, "av_offset", lambda i: None)
+    monkeypatch.setattr(gv.media, "display_aspect", lambda i: None)
+    monkeypatch.setattr(gv.media, "ffprobe", lambda: "ffprobe")
+    monkeypatch.setattr(gv.subprocess, "run", lambda *a, **k: SimpleNamespace(stdout="", stderr="", returncode=0))
+    monkeypatch.setattr(gv, "_vmaf", lambda *a, **k: 95.0)
+    monkeypatch.setattr(gv, "_frames_by_index", lambda *a, **k: {})
+    times = {"a.mkv": [1.0, 1.04, 1.5, 1.54], "b.mkv": [0.0, 0.04, 0.08, 0.12]}      # a pause the output lost
+    monkeypatch.setattr(gv, "_frame_times", lambda p: times[Path(p).name])
+    g = next(g for g in gv.verify_video(tmp_path / "a.mkv", tmp_path / "b.mkv").gates if g.name == "timing")
+    assert g.status == "warn" and g.value == 0.42
+    times["b.mkv"] = [5.0, 5.04, 5.5, 5.54]                  # another start, the same rhythm
+    g = next(g for g in gv.verify_video(tmp_path / "a.mkv", tmp_path / "b.mkv").gates if g.name == "timing")
+    assert g.status == "pass" and g.value == 0.0
