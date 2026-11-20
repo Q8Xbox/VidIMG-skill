@@ -23,6 +23,8 @@ approved order follows).
 
 from __future__ import annotations
 
+from . import imgfile
+
 import html
 import json
 import time
@@ -34,9 +36,7 @@ from typing import Callable
 from . import config, statefile
 from .adapters import OUTPUT_MARKER, mark_output
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
-VIDEO_EXT = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv", ".ts", ".mts", ".m2ts", ".3gp", ".webm",
-             ".vob"}
+from .media import IMAGE_EXT, VIDEO_EXT  # noqa: E402  (one list for every entry point)
 SERIES_MIN = 3                 # numbered episodes in one folder that make it a series
 SHEETS_PER_PAGE = 6            # video frame sheets per contact sheet
 PLAN_VERSION = 1
@@ -147,7 +147,7 @@ def _contact_sheets(items: list[dict], out: Path) -> list[str]:
     for it in items:
         if not it.get("frames_sheet"):
             continue
-        img = cv2.imread(it["frames_sheet"])
+        img = imgfile.imread(it["frames_sheet"])
         if img is None:
             continue
         img = cv2.resize(img, (960, round(img.shape[0] * 960 / img.shape[1])), interpolation=cv2.INTER_AREA)
@@ -160,7 +160,7 @@ def _contact_sheets(items: list[dict], out: Path) -> list[str]:
     for k in range(0, len(rows), SHEETS_PER_PAGE):
         p = out / "survey" / f"contact_{k // SHEETS_PER_PAGE + 1}.jpg"
         p.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(p), np.vstack(rows[k:k + SHEETS_PER_PAGE]), [cv2.IMWRITE_JPEG_QUALITY, 85])
+        imgfile.imwrite(str(p), np.vstack(rows[k:k + SHEETS_PER_PAGE]), [cv2.IMWRITE_JPEG_QUALITY, 85])
         pages.append(str(p))
     return pages
 
@@ -392,7 +392,8 @@ def _run_photos(it: dict, out: Path, log) -> None:
         f = Path(d["source"])
         shown = d["delivered"] or next((x["output"] for x in d["attempts"] if x.get("output")), None)
         if shown:
-            sheets[f.name] = compare.sheet(f, Path(shown), dst / "sheets" / f"{f.stem}.jpg")
+            # keyed by the whole path, named by the photo's own id: two photos called IMG_1 shared one sheet
+            sheets[str(f)] = compare.sheet(f, Path(shown), dst / "sheets" / f"{batch._key(f)}.jpg")
     (dst / "records.json").write_text(json.dumps(records, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     page = compare.review_page(records, sheets, dst / "sheets" / "index.html")
     passed = sum(bool(r["passed"]) for r in records)

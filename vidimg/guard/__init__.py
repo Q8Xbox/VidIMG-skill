@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 from skimage.color import deltaE_ciede2000, rgb2lab
 from skimage.metrics import structural_similarity
+from .. import imgfile  # noqa: E402
 
 from .. import config, faces
 
@@ -123,7 +124,7 @@ class GuardReport:
 
 
 def _read(path: Path) -> np.ndarray:
-    img = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    img = imgfile.imread(str(path), cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError(f"cannot read {path}")
     return img

@@ -35,6 +35,14 @@ def count_frames(path: Path) -> int | None:
     return int(s) if s.isdigit() else None
 
 
+# The media the tool accepts: one list for the survey, the MCP tools, the command line and series folders (they each
+# had their own and disagreed: .vob, .3gp and .webm were videos in one place and ignored in another). No .heic:
+# neither OpenCV nor Pillow here can open it, so listing it only moved the failure to the middle of a run.
+IMAGE_EXT = frozenset({".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"})
+VIDEO_EXT = frozenset({".mp4", ".mkv", ".mov", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv", ".ts", ".mts", ".m2ts", ".3gp",
+                       ".webm", ".vob"})
+
+
 def concat_line(path: Path) -> str:
     """One `file` line for ffmpeg's concat demuxer. Inside its single quotes an apostrophe ends the string, so it
     is written as '\\'' (a folder named "Dad's birthday" made every join fail after all chunks were rendered)."""

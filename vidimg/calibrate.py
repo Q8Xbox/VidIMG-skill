@@ -20,12 +20,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from . import imgfile  # noqa: E402
 
 from . import config, faces, guard
 from .adapters import free_sr, video2x
 
 MIN_IMAGES_TO_APPLY = 20
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+from .media import IMAGE_EXT  # noqa: E402  (one list for every entry point)
 CROP_MAX = 1600
 # Degraded faces must stay large enough for identity to be recoverable at all: the first run on the
 # person's photos used a fixed x4 and left faces of 3-27 px, where every model (faithful or not) scored
@@ -109,7 +110,7 @@ def _gt_identity(gt: np.ndarray, out: np.ndarray) -> float | None:
 
 def _score(c: Candidate, gt: np.ndarray, lr_p: Path, out_p: Path, photo: str, bic_psnr: float,
            gt_has_faces: bool, seconds: float = 0.0) -> dict:
-    out = cv2.imread(str(out_p))
+    out = imgfile.imread(str(out_p))
     if out.shape[:2] != gt.shape[:2]:
         out = cv2.resize(out, (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_AREA)
     rep = guard.verify_image(lr_p, out_p)
@@ -137,9 +138,9 @@ def rescore(run_dir: Path, log=print) -> dict:
     records = []
     dirs = sorted(d for d in run_dir.iterdir() if d.is_dir() and (d / "in" / "gt.png").exists())
     for d in dirs:
-        gt = cv2.imread(str(d / "in" / "gt.png"))
+        gt = imgfile.imread(str(d / "in" / "gt.png"))
         lr_p = d / "in" / "lr.jpg"
-        bic = cv2.resize(cv2.imread(str(lr_p)), (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_CUBIC)
+        bic = cv2.resize(imgfile.imread(str(lr_p)), (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_CUBIC)
         has_faces = bool(faces.available() and faces.detect(gt, score=guard.FACE_SCORE))
         stem = d.name.split("_", 1)[1]
         for c in CANDIDATES:
@@ -157,9 +158,9 @@ def rescore(run_dir: Path, log=print) -> dict:
 def _restore(c: Candidate, lr: Path, work: Path, factor: int = 4) -> Path | None:
     if c.engine == "free":
         if c.kwargs["model"] is None:                       # classical Lanczos reference
-            img = cv2.imread(str(lr))
+            img = imgfile.imread(str(lr))
             out = work / f"{lr.stem}_{c.name}.png"
-            cv2.imwrite(str(out), cv2.resize(img, (img.shape[1] * factor, img.shape[0] * factor),
+            imgfile.imwrite(str(out), cv2.resize(img, (img.shape[1] * factor, img.shape[0] * factor),
                                              interpolation=cv2.INTER_LANCZOS4))
             return out
         r = free_sr.upscale(lr, work, model=c.kwargs["model"], scale=factor, suffix=f"_{c.name}")
@@ -198,7 +199,7 @@ def run(folder: Path, *, limit: int | None = None, apply: bool = False, out_root
     records: list[dict] = []
     skipped: list[dict] = []
     for n, photo in enumerate(photos, 1):
-        img = cv2.imread(str(photo))
+        img = imgfile.imread(str(photo))
         if img is None:
             continue
         gt, factor, note = plan_degradation(img)
@@ -210,9 +211,9 @@ def run(folder: Path, *, limit: int | None = None, apply: bool = False, out_root
         (work / "in").mkdir(parents=True, exist_ok=True)
         lr_img = cv2.resize(gt, (gt.shape[1] // factor, gt.shape[0] // factor), interpolation=cv2.INTER_AREA)
         gt_p, lr_p = work / "in" / "gt.png", work / "in" / "lr.jpg"
-        cv2.imwrite(str(gt_p), gt)
-        cv2.imwrite(str(lr_p), lr_img, [cv2.IMWRITE_JPEG_QUALITY, 60])
-        bic = cv2.resize(cv2.imread(str(lr_p)), (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_CUBIC)
+        imgfile.imwrite(str(gt_p), gt)
+        imgfile.imwrite(str(lr_p), lr_img, [cv2.IMWRITE_JPEG_QUALITY, 60])
+        bic = cv2.resize(imgfile.imread(str(lr_p)), (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_CUBIC)
         bic_psnr = cv2.PSNR(gt, bic)
         has_faces = bool(faces.available() and faces.detect(gt, score=guard.FACE_SCORE))
         log(f"[{n}/{len(photos)}] {photo.name}: gt {gt.shape[1]}x{gt.shape[0]} x{factor} ({note})")

@@ -29,7 +29,7 @@ from typing import Callable
 
 import numpy as np
 
-VIDEO_EXT = {".mkv", ".mp4", ".avi", ".mov", ".m4v", ".ts", ".m2ts", ".wmv", ".webm", ".mpg", ".mpeg", ".vob"}
+from .media import VIDEO_EXT  # noqa: E402  (one list for every entry point)
 
 _PATTERNS = (
     r"[Ss]\d{1,2}\s*[Ee](\d{1,3})(?!\d)",                              # S01E05

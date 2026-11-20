@@ -13,6 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
+from .. import imgfile  # noqa: E402
 
 from .. import faces
 
@@ -78,7 +79,7 @@ def jpeg_quality(path: Path) -> int | None:
 
 
 def _read(path: Path) -> tuple[np.ndarray, int]:
-    raw = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    raw = imgfile.imread(str(path), cv2.IMREAD_UNCHANGED)
     if raw is None:
         raise ValueError(f"cannot read image {path}")
     depth = 16 if raw.dtype == np.uint16 else 8
@@ -104,9 +105,16 @@ def _grid_tiles(img: np.ndarray, side: int, n: int = 3) -> list[np.ndarray]:
     return [img[y:y + s, x:x + s] for y in ys for x in xs]
 
 
+FLAT_FRAME_STD = 2.0            # 8-bit levels: below this a picture holds nothing to judge
+
+
 def anime_score(img: np.ndarray) -> float:
     """Flat colour areas + few distinct colours + strong clean edges -> close to 1."""
     v = _view(img, 512)
+    if float(np.std(v)) < FLAT_FRAME_STD:
+        # a black or single-colour picture (a fade, a title card background) is "flat, few colours" by definition
+        # and scored 0.85: it says nothing about drawn or real
+        return 0.0
     q = (v // 16).reshape(-1, 3).astype(np.int32)
     distinct = len(np.unique(q[:, 0] * 256 + q[:, 1] * 16 + q[:, 2])) / 4096
     gray = cv2.cvtColor(v, cv2.COLOR_BGR2GRAY)
