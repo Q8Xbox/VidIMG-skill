@@ -19,7 +19,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import config
+from . import config, statefile
 
 ROOT = config.OUTPUT_ROOT / "jobs"
 LOCK = ROOT / "gpu.lock"
@@ -33,29 +33,48 @@ def _job_dir(job_id: str) -> Path:
 
 
 def _write(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
-    tmp.replace(path)
+    statefile.write_json(path, data)
 
 
 def _read(path: Path) -> dict:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    return statefile.read_json(path)
 
 
-def _alive(pid: int | None) -> bool:
+def _set(d: Path, **fields) -> dict:
+    """Merge fields into the job's state. Every writer merges: a writer that replaced the whole state dropped a
+    cancel request another process had just recorded."""
+    return statefile.update(d / "state.json", **fields)
+
+
+def _proc(pid: int | None) -> tuple[bool, int | None]:
+    """(still running, creation time) of a process."""
     if not pid:
-        return False
+        return False, None
     k32 = ctypes.windll.kernel32
     h = k32.OpenProcess(0x1000, False, int(pid))          # PROCESS_QUERY_LIMITED_INFORMATION
     if not h:
-        return False
-    code = ctypes.c_ulong()
-    ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
-    k32.CloseHandle(h)
-    return bool(ok) and code.value == 259                  # STILL_ACTIVE
+        return False, None
+    try:
+        code = ctypes.c_ulong()
+        ok = k32.GetExitCodeProcess(h, ctypes.byref(code))
+        t = [ctypes.c_ulonglong() for _ in range(4)]
+        made = t[0].value if k32.GetProcessTimes(h, *(ctypes.byref(x) for x in t)) else None
+        return bool(ok) and code.value == 259, made        # STILL_ACTIVE
+    finally:
+        k32.CloseHandle(h)
+
+
+def _born(pid: int | None) -> int | None:
+    return _proc(pid)[1]
+
+
+def _alive(pid: int | None, born: int | None = None) -> bool:
+    """The process recorded for a job is still running. `born` is its creation time as recorded with the pid:
+    Windows reuses process ids, so after a reboot a finished job's id can belong to any other program, which kept
+    the job "running" for ever and could hold the queue. Without `born` (state from an older version) the id alone
+    decides."""
+    alive, made = _proc(pid)
+    return alive and (born is None or made is None or made == born)
 
 
 def start(kind: str, args: list[str], out_dir: Path, label: str) -> dict:
@@ -74,7 +93,8 @@ def start(kind: str, args: list[str], out_dir: Path, label: str) -> dict:
     with open(d / "worker.txt", "wb") as wlog:
         p = subprocess.Popen([sys.executable, "-m", "vidimg.jobs", "run", job_id], cwd=str(config.PROJECT_ROOT),
                              stdin=subprocess.DEVNULL, stdout=wlog, stderr=subprocess.STDOUT, creationflags=flags)
-    _write(d / "state.json", {"state": "starting", "worker_pid": p.pid})
+    # only the worker's identity is added: the worker may already have written "queued" or "running" itself
+    _set(d, worker_pid=p.pid, worker_born=_born(p.pid))
     return status(job_id)
 
 
@@ -91,7 +111,7 @@ def _older_waiting(d: Path) -> bool:
         if other == d or not (other / "meta.json").exists():
             continue
         st = _read(other / "state.json")
-        if st.get("state") in ("starting", "queued") and not st.get("cancel") and _alive(st.get("worker_pid"))                 and _queue_key(other) < mine:
+        if st.get("state") in ("starting", "queued") and not st.get("cancel") and _alive(st.get("worker_pid"), st.get("worker_born"))                 and _queue_key(other) < mine:
             return True
     return False
 
@@ -111,7 +131,7 @@ def _acquire_lock(d: Path):
             if st.get("cancel"):
                 f.close()
                 return None
-            _write(d / "state.json", {**st, "state": "queued", "worker_pid": os.getpid()})
+            _set(d, state="queued", worker_pid=os.getpid(), worker_born=_born(os.getpid()))
             time.sleep(3)
 
 
@@ -119,9 +139,13 @@ def run(job_id: str) -> int:
     """Worker body: wait for the GPU lock, run the CLI, record the outcome."""
     d = _job_dir(job_id)
     meta = _read(d / "meta.json")
+    _set(d, worker_pid=os.getpid(), worker_born=_born(os.getpid()))
     lock = _acquire_lock(d)
-    if lock is None:
-        _write(d / "state.json", {"state": "cancelled", "finished": datetime.now().isoformat(timespec="seconds")})
+    now = lambda: datetime.now().isoformat(timespec="seconds")  # noqa: E731
+    if lock is None or _read(d / "state.json").get("cancel"):   # cancelled while waiting, or just before the start
+        if lock is not None:
+            lock.close()
+        _set(d, state="cancelled", finished=now())
         return 1
     try:
         with open(d / "log.txt", "w", encoding="utf-8", errors="replace") as log:
@@ -129,14 +153,14 @@ def run(job_id: str) -> int:
                                  stderr=subprocess.STDOUT, env={**os.environ, "PYTHONIOENCODING": "utf-8",
                                                                 "PYTHONUNBUFFERED": "1"},
                                  creationflags=0x08000000)
-            _write(d / "state.json", {"state": "running", "worker_pid": os.getpid(), "pid": p.pid,
-                                      "started": datetime.now().isoformat(timespec="seconds"),
-                                      "resumed": _read(d / "state.json").get("resumed", 0)})
+            st = _set(d, state="running", pid=p.pid, pid_born=_born(p.pid), started=now())
+            if st.get("cancel"):
+                # the request arrived between the check above and the start: cancel() saw no process to stop
+                subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True, stdin=subprocess.DEVNULL)
             code = p.wait()
         st = _read(d / "state.json")
         final = "cancelled" if st.get("cancel") else ("done" if code == 0 else "failed")
-        _write(d / "state.json", {**st, "state": final, "returncode": code,
-                                  "finished": datetime.now().isoformat(timespec="seconds")})
+        _set(d, state=final, returncode=code, finished=now())
         return code
     finally:
         lock.close()
@@ -182,7 +206,8 @@ def status(job_id: str) -> dict:
     if not meta:
         raise FileNotFoundError(f"no job {job_id}")
     state = st.get("state", "unknown")
-    if state in ("starting", "queued", "running") and not _alive(st.get("worker_pid")) and not _alive(st.get("pid")):
+    if state in ("starting", "queued", "running") and not _alive(st.get("worker_pid"), st.get("worker_born")) \
+            and not _alive(st.get("pid"), st.get("pid_born")):
         state = "crashed"
     res = {"id": job_id, "kind": meta["kind"], "label": meta["label"], "state": state, "out": meta["out"],
            "created": meta["created"], "started": st.get("started"), "finished": st.get("finished"),
@@ -228,19 +253,20 @@ def resume(job_id: str) -> dict:
     log = d / "log.txt"
     if log.exists():                                        # keep the previous attempt's log
         log.replace(d / f"log.before-resume-{datetime.now().strftime('%H%M%S')}.txt")
-    _write(d / "state.json", {"state": "starting", "resumed": (old.get("resumed") or 0) + 1})
+    _write(d / "state.json", {"state": "starting", "resumed": (old.get("resumed") or 0) + 1})   # a clean slate
     pid = _launch(job_id)
-    _write(d / "state.json", {"state": "starting", "worker_pid": pid, "resumed": (old.get("resumed") or 0) + 1})
+    _set(d, worker_pid=pid, worker_born=_born(pid))
     return status(job_id)
 
 
 def cancel(job_id: str) -> dict:
     d = _job_dir(job_id)
-    st = _read(d / "state.json")
-    _write(d / "state.json", {**st, "cancel": True})
-    for pid in (st.get("pid"),):
-        if _alive(pid):
-            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, stdin=subprocess.DEVNULL)
+    st = _set(d, cancel=True)                              # merged: the worker's own writes keep it
+    if _alive(st.get("pid"), st.get("pid_born")):
+        subprocess.run(["taskkill", "/PID", str(st["pid"]), "/T", "/F"], capture_output=True, stdin=subprocess.DEVNULL)
+    elif st.get("state") in ("starting", "queued", "running") and not _alive(st.get("worker_pid"), st.get("worker_born")):
+        # nothing is running any more (a reboot, a crash): the job would otherwise stay "crashed" with a pending cancel
+        _set(d, state="cancelled", finished=datetime.now().isoformat(timespec="seconds"))
     return status(job_id)
 
 

@@ -31,7 +31,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
-from . import config
+from . import config, statefile
 from .adapters import OUTPUT_MARKER, mark_output
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
@@ -246,10 +246,32 @@ def load(out: Path) -> dict:
 
 
 def save(plan: dict) -> None:
-    p = Path(plan["out"]) / "plan.json"
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(plan, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
-    tmp.replace(p)
+    statefile.write_json(Path(plan["out"]) / "plan.json", plan)
+
+
+def _save_run(plan: dict, current: dict | None = None) -> None:
+    """The runner's save. It holds the plan in memory for hours, so decisions made meanwhile (decide_plan) are on
+    disk only: they are taken over here instead of being overwritten. The runner itself never changes a decision,
+    so any difference comes from a person or Claude.
+    - an item not started yet runs with the new decision;
+    - the item running now finishes with the old one and is then set back to pending (`current`);
+    - a finished item that decide() set back to pending stays pending for the next run."""
+    path = Path(plan["out"]) / "plan.json"
+    with statefile.locked(path):
+        disk = {it.get("id"): it for it in statefile.read_json(path).get("items", [])}
+        for it in plan["items"]:
+            d = disk.get(it["id"])
+            if not d or d.get("decision") == it.get("decision"):
+                continue
+            it["decision"], it["decided_by"] = d["decision"], d.get("decided_by", it.get("decided_by"))
+            it["reasons"] = d.get("reasons", it.get("reasons"))
+            if "needs_look" not in d:
+                it.pop("needs_look", None)
+            if it is current:
+                it["redo"] = True
+            elif d.get("state") == "pending" and it.get("state") in ("error", "kept_original", "skipped"):
+                it["state"] = "pending"
+        statefile.write_json(path, plan)
 
 
 def summary(plan: dict) -> dict:
@@ -284,6 +306,11 @@ def summary(plan: dict) -> dict:
 def decide(out: Path, decisions: dict[str, dict], by: str = "claude") -> dict:
     """Apply corrections: {item_id: {content, model, model_strict, scale, texture, mask_tape_noise, preview_only,
     deblur, skip, reason}}. Unknown items or keys raise; a changed content re-picks the model from the guide."""
+    with statefile.locked(plan_path(out)):                  # against the runner's saves (see _save_run)
+        return _decide(out, decisions, by)
+
+
+def _decide(out: Path, decisions: dict[str, dict], by: str) -> dict:
     plan = load(out)
     index = {it["id"]: it for it in plan["items"]}
     for item_id, d in decisions.items():
@@ -427,16 +454,17 @@ def run(out: Path, log: Callable[[str], None] = print) -> dict:
     for n, it in enumerate(plan["items"], 1):
         if it.get("state") in DONE:
             continue
+        _save_run(plan)                                     # take over decisions made since the last save
         if it["decision"].get("skip"):
             it["state"] = "skipped"
-            save(plan)
+            _save_run(plan)
             continue
         name = it["id"] + " " + (Path(it["source"]).name if it.get("source") else f"({it.get('count')} photos)")
         log(f"[{n}/{len(plan['items'])}] {name}: {json.dumps(it['decision'], default=str)}")
         t0 = time.time()
         texture_default, it["state"] = config.TEXTURE_STRENGTH, "running"
         it.pop("error", None)
-        save(plan)
+        _save_run(plan, it)
         try:
             if it["decision"].get("texture") is not None:
                 config.TEXTURE_STRENGTH = float(it["decision"]["texture"])
@@ -447,11 +475,17 @@ def run(out: Path, log: Callable[[str], None] = print) -> dict:
         finally:
             config.TEXTURE_STRENGTH = texture_default
         it["minutes"] = round((time.time() - t0) / 60, 1)
-        save(plan)
+        _save_run(plan, it)
+        if it.pop("redo", False):
+            it["state"] = "pending"
+            it.setdefault("reasons", []).append("the decision changed while this item was running: it ran with the "
+                                                "old one and is pending again for the new one")
+            _save_run(plan)
+            log(f"{it['id']}: decision changed during the run: pending again (run the plan once more)")
         log(f"{it['id']}: {it['state']} in {it['minutes']} min")
     plan["report"] = str(write_report(plan))
     plan["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    save(plan)
+    _save_run(plan)
     log(f"FINISHED: report {plan['report']}")
     return plan
 
