@@ -204,3 +204,60 @@ def test_cut_off_video2x_output_is_not_a_result(tmp_path, monkeypatch):
     assert not r.ok and "700 of 1000" in r.error
     frames[dst] = 998                                                # the two frames Video2X always drops
     assert video2x.run_stage(src, dst, video2x.AnimeSR()).ok
+
+
+# ----------------------------------------------------------------------------- remaining guard holes
+def test_interpolated_video_is_compared_on_the_frames_it_kept(tmp_path, monkeypatch):
+    good, other = _texture(), cv2.flip(_texture(), 1)
+    asked = {}
+
+    def frames(output_img):
+        def get(path, indices, folder, tag, pre_vf=None):
+            asked[tag] = list(indices)
+            out = {}
+            for i in indices:
+                out[i] = Path(folder) / f"{tag}_{i}.png"
+                cv2.imwrite(str(out[i]), good if tag == "s" else output_img)
+            return out
+        return get
+
+    def probe(p, exact=False):                              # the output has twice the frames
+        return {"frames": 1200 if Path(p).name == "b.mkv" else 600, "duration": 24.0, "audio_streams": 1,
+                "fps": 25.0, "width": 96, "height": 72, "sar": "1:1"}
+
+    _stub_video(monkeypatch, frames(good))
+    monkeypatch.setattr(gv.media, "probe", probe)
+    rep = gv.verify_video(tmp_path / "a.mkv", tmp_path / "b.mkv", interpolated=True)
+    assert rep.passed and next(g for g in rep.gates if g.name == "coverage").value == 6
+    assert asked["d"] == [2 * s for s in (50, 150, 250, 350, 450, 550)]     # output frame = 2 x source frame
+    monkeypatch.setattr(gv, "_frames_by_index", frames(other))             # a different picture in the output
+    rep = gv.verify_video(tmp_path / "a.mkv", tmp_path / "b.mkv", interpolated=True)
+    assert not rep.passed and "backprojection" in rep.failed()
+
+
+def test_chroma_check_fails_without_a_reading(tmp_path, monkeypatch):
+    from vidimg.probe import chroma
+
+    monkeypatch.setattr(chroma, "analyze", lambda p: chroma.ChromaShift())      # nothing could be read back
+    rep = gv.verify_chroma(tmp_path / "a.nut", tmp_path / "b.nut", moved={"u": [0, -4.5], "v": [0, -4.5]},
+                           before={"u": [0, 4.5], "v": [0, 4.5]}, luma_must_match=False)
+    assert not rep.passed and rep.failed() == ["chroma_aligned"]
+
+
+def test_photo_result_keeps_the_colour_profile(tmp_path):
+    from PIL import Image, ImageCms
+
+    from vidimg.pipeline import carry_color_profile
+
+    icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    src, plain, out = tmp_path / "p.jpg", tmp_path / "n.jpg", tmp_path / "p_restored.png"
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(src, icc_profile=icc)
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(plain)
+    px = np.arange(16 * 16 * 3, dtype=np.uint16).reshape(16, 16, 3) * 80
+    cv2.imwrite(str(out), px)                               # 16-bit, as the model worker writes it
+    assert carry_color_profile(plain, out) is None          # no profile in the source: file untouched
+    assert carry_color_profile(src, out) == "colour profile of the original kept"
+    with Image.open(out) as im:
+        assert im.info.get("icc_profile") == icc
+    assert np.array_equal(cv2.imread(str(out), cv2.IMREAD_UNCHANGED), px)      # pixels are not touched
+    assert carry_color_profile(src, out) is None            # already there: not added twice

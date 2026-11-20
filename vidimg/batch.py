@@ -22,7 +22,7 @@ from pathlib import Path
 
 from . import config, guard, proc
 from .adapters import free_sr, mark_output
-from .pipeline import Attempt, RestoreRecord, choose_scale, deblur_step, plan_candidates
+from .pipeline import Attempt, RestoreRecord, carry_color_profile, choose_scale, deblur_step, plan_candidates
 from .probe import image as probe
 
 STATE_VERSION = 1
@@ -116,6 +116,9 @@ def _finish(it: Item, out: Path, taken: set[str]) -> None:
         final = out / name
         shutil.copyfile(chosen.output, final)
         s.update(status="delivered", delivered=str(final))
+        note = carry_color_profile(it.src, final)
+        if note:
+            s["notes"].append(note)
         if chosen.warnings:
             s["notes"].append(f"delivered with warnings {chosen.warnings}: no candidate passed cleanly")
     else:

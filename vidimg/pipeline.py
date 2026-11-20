@@ -101,6 +101,33 @@ def deblur_step(src: Path, stage_in: Path, prof: probe.ImageProfile, policy: con
     return Path(r.output), att, f"NAFNet-GoPro deblur first (sharpness {prof.sharpness})"
 
 
+def carry_color_profile(src: Path, png: Path) -> str | None:
+    """Copy the source's ICC colour profile into the delivered PNG (an iCCP chunk; the pixels are not touched).
+    The models work on the stored values, so the result is in the source's colour space; without the profile a
+    Display P3 or Adobe RGB photo is shown as sRGB and looks washed out. Returns a note, or None without a profile."""
+    import struct
+    import zlib
+
+    from PIL import Image
+    try:
+        with Image.open(src) as im:
+            icc = im.info.get("icc_profile")
+        if not icc:
+            return None
+        data = Path(png).read_bytes()
+        if data[:8] != b"\x89PNG\r\n\x1a\n" or b"iCCP" in data[:4096]:
+            return None
+        end = 8 + 8 + struct.unpack(">I", data[8:12])[0] + 4          # signature + the IHDR chunk
+        body = b"icc\x00\x00" + zlib.compress(icc, 9)                 # name, terminator, method 0 (deflate)
+        chunk = struct.pack(">I", len(body)) + b"iCCP" + body + struct.pack(">I", zlib.crc32(b"iCCP" + body))
+        tmp = Path(png).with_suffix(".icc.tmp")
+        tmp.write_bytes(data[:end] + chunk + data[end:])
+        tmp.replace(png)
+        return "colour profile of the original kept"
+    except Exception as e:  # noqa: BLE001  (a profile that cannot be read must not cost the photo)
+        return f"colour profile of the original could not be copied ({type(e).__name__})"
+
+
 def restore_image(src: Path, out_dir: Path, *, policy: config.Policy = config.DEFAULT_POLICY,
                   max_attempts: int | None = None, log=print) -> RestoreRecord:
     src = Path(src)
@@ -171,6 +198,9 @@ def restore_image(src: Path, out_dir: Path, *, policy: config.Policy = config.DE
         final = out_dir / f"{src.stem}_restored.png"
         shutil.copyfile(chosen.output, final)
         rec.delivered, rec.passed = str(final), True
+        note = carry_color_profile(src, final)
+        if note:
+            rec.notes.append(note)
         if chosen.warnings:
             rec.notes.append(f"delivered with warnings {chosen.warnings}: no candidate passed cleanly")
     if not rec.passed:
