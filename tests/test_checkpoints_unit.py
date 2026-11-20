@@ -139,14 +139,16 @@ def test_rejected_output_leaves_the_results_folder(tmp_path, monkeypatch):
 
 
 def test_a_silent_program_is_stopped(monkeypatch, tmp_path):
+    """The limits here are far above the time Python needs to start: with 1 s the interpreter's own start-up was
+    sometimes read as a stall (the program was stopped before it had printed its first line; 8 of 40 runs)."""
     monkeypatch.setattr(proc, "_log", lambda result, env: tmp_path / "log.json")
+    py = [sys.executable, "-S", "-E", "-c"]                  # no site packages: starts as fast as it can
     t = time.monotonic()
-    r = proc.run("sleeper", [sys.executable, "-c", "import time; print('start', flush=True); time.sleep(60)"],
-                 stall_timeout=1.0)
-    assert time.monotonic() - t < 30 and r.returncode != 0
-    assert "stalled" in r.stdout_tail[-1] and r.stdout_tail[0] == "start"
-    r = proc.run("talker", [sys.executable, "-c",
-                            "import time\nfor i in range(6):\n print(i, flush=True); time.sleep(0.4)"], stall_timeout=1.5)
+    r = proc.run("sleeper", [*py, "import time; print('start', flush=True); time.sleep(120)"], stall_timeout=5.0)
+    assert time.monotonic() - t < 60 and r.returncode != 0
+    assert "stalled" in r.stdout_tail[-1] and r.stdout_tail[0] == "start"      # what it said before is kept
+    r = proc.run("talker", [*py, "import time\nfor i in range(6):\n print(i, flush=True); time.sleep(0.4)"],
+                 stall_timeout=5.0)
     assert r.returncode == 0 and r.stdout_tail[-1] == "5"   # slow but talking: left alone
 
 
