@@ -56,8 +56,8 @@ def _frames_by_index(path: Path, indices: list[int], folder: Path, tag: str, pre
     output, and image2 output duplicates frames of VFR files unless passthrough is used)."""
     expr = "+".join(f"eq(n\\,{i})" for i in sorted(set(indices)))
     pattern = folder / f"{tag}_%04d.png"
-    subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-vf", (f"{pre_vf}," if pre_vf else "") + f"select='{expr}'",
-                    "-fps_mode", "passthrough", "-y", str(pattern)], stdin=subprocess.DEVNULL, timeout=3600)
+    media.run_quiet([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-vf", (f"{pre_vf}," if pre_vf else "") + f"select='{expr}'",
+                     "-fps_mode", "passthrough", "-y", str(pattern)], timeout=3600)
     files = sorted(folder.glob(f"{tag}_*.png"))
     return dict(zip(sorted(set(indices)), files))
 

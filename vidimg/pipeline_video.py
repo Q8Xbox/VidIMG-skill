@@ -826,10 +826,9 @@ def _preview_starts(p: probe.VideoProfile) -> list[float]:
 def _cut(src: Path, start: float, seconds: float, dst: Path) -> None:
     # a cut from the NUT pre-pass gets the source's colour tags written into the .mkv container
     tags = media.colour_args(media.colour_hint(src))[1]
-    subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{seconds:g}",
-                    "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",   # subtitles inflated the clip's
-                    "-c:v", "ffv1", *tags, "-c:a", "flac", str(dst)], check=True,       # duration (Sample05: 1118 s)
-                   stdin=subprocess.DEVNULL)
+    media.run_quiet([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.2f}", "-t", f"{seconds:g}",
+                     "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn",   # subtitles inflated the clip's
+                     "-c:v", "ffv1", *tags, "-c:a", "flac", str(dst)], check=True)      # duration (Sample05: 1118 s)
 
 
 def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encoder: str = "hevc10",
