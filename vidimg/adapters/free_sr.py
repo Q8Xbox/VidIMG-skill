@@ -171,6 +171,10 @@ class FreeSR:
         return f"free:{self.model}" + (f":h={self.height}" if self.height else "") + (f":x{self.scale:g}" if self.scale else "")
 
 
+STALL_SECONDS = 1800.0          # encoder silent this long = the worker upstream hangs (no frame takes 30 min)
+CHILD_EXIT_SECONDS = 60.0       # decoder and worker get this long to end by themselves once the encoder is gone
+
+
 def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
         on_progress: Callable[[int, int], None] | None = None, timeout: float | None = None,
         start: float | None = None, duration: float | None = None, expected_frames: int | None = None,
@@ -254,11 +258,20 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
         if m and on_progress:
             on_progress(int(m.group(1)), expected)
 
-    r = proc.run("free_sr_video", [*enc_args, str(dst)], stdin_pipe=worker.stdout, on_line=line, timeout=timeout)
-    worker.stdout.close()
-    worker.wait()
-    dec.wait()
-    wlog.close()
+    try:
+        r = proc.run("free_sr_video", [*enc_args, str(dst)], stdin_pipe=worker.stdout, on_line=line, timeout=timeout,
+                     stall_timeout=STALL_SECONDS)
+    finally:
+        # the encoder is gone (finished, died on a full disk, or killed as stalled): nothing may outlive it. A
+        # worker left writing into a closed pipe used to block for ever and keep the GPU
+        worker.stdout.close()
+        for child in (worker, dec):
+            try:
+                child.wait(timeout=CHILD_EXIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+        wlog.close()
     if worker.returncode != 0 or r.returncode != 0 or not dst.exists():
         werr = worker_log.read_text(encoding="utf-8", errors="replace").strip().splitlines()
         return AdapterResult(False, error=(werr[-1] if werr else None) or f"encoder exit {r.returncode}", run=r)

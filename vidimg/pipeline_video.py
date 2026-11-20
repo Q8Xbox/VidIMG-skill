@@ -12,7 +12,9 @@ delivered and the record explains why.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
 import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
@@ -300,6 +302,35 @@ def chunk_plan(duration: float, chunk: float | None = None, cuts: list[float] | 
     return [(edges[i], edges[i + 1] - edges[i]) for i in range(n)]
 
 
+def fingerprint(*parts) -> str:
+    """What made a checkpoint, as a short hash: a checkpoint is reused only when this still matches."""
+    return hashlib.sha1(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def source_id(src: Path) -> dict:
+    st = Path(src).stat()
+    return {"path": str(Path(src).resolve()), "size": st.st_size, "mtime": int(st.st_mtime)}
+
+
+def wipe_checkpoints(work: Path, keep: tuple[str, ...] = ()) -> None:
+    """Remove everything a previous run left in the work folder except `keep` (names directly in it)."""
+    for f in Path(work).iterdir() if Path(work).is_dir() else []:
+        if f.name in keep:
+            continue
+        shutil.rmtree(f, ignore_errors=True) if f.is_dir() else f.unlink(missing_ok=True)
+
+
+def work_key(out_dir: Path, src: Path) -> str:
+    """Name of the video's work folder and deliverable: its stem, unless another file with the same stem (ep01.avi
+    next to ep01.mkv) already owns that work folder; then the stem plus a short hash of the path."""
+    try:
+        owner = json.loads((Path(out_dir) / "work" / src.stem / "profile.json").read_text(encoding="utf-8"))["source"]["path"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return src.stem
+    mine = str(Path(src).resolve())
+    return src.stem if owner.lower() == mine.lower() else f"{src.stem}-{hashlib.sha1(mine.lower().encode()).hexdigest()[:8]}"
+
+
 def scene_cuts(video: Path, work: Path, log=print) -> list[float]:
     """Scene-cut times over the whole video (once; cached in the work folder for resume)."""
     cache = work / "cuts.json"
@@ -324,6 +355,19 @@ def run_chunked(base: Path, dst: Path, stages_fn: Callable[[], list], encoder: s
     fps, dur = info["fps"], info["duration"]
     cdir = work / "chunks"
     cdir.mkdir(parents=True, exist_ok=True)
+    # chunks are reused only when the same input, model, scale and encoder made them: a rerun with another model
+    # used to join old and new chunks into one file. Chunks from before this check carry no fingerprint and are
+    # trusted as they are
+    made_by = fingerprint(base.name, base.stat().st_size, [getattr(s, "describe", lambda s=s: repr(s))() for s in stages_fn()],
+                          encoder, CHUNK_SECONDS, CHUNK_CONTEXT_SECONDS)
+    fp_file = cdir / "fingerprint.json"
+    stored = json.loads(fp_file.read_text(encoding="utf-8")) if fp_file.exists() else None
+    if stored is not None and stored != made_by:
+        log("   chunks from a run with other settings or another input: starting them again")
+        shutil.rmtree(cdir, ignore_errors=True)
+        cdir.mkdir(parents=True, exist_ok=True)
+        (work / "cuts.json").unlink(missing_ok=True)
+    fp_file.write_text(json.dumps(made_by), encoding="utf-8")
     cuts = scene_cuts(base, work, log)
     plan_file = cdir / "plan.json"
     if plan_file.exists():                       # resume: never re-plan under finished chunks
@@ -567,10 +611,15 @@ def run_deblend(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
     did not pass its guard: the caller keeps the blended input (still restorable, just not un-blended)."""
     ddir = work / "deblend"                 # its own folder: an output folder may not hold the pass's input
     dst, done = ddir / "deblend.nut", ddir / "deblend.done"
+    made_by = fingerprint(base.name, base.stat().st_size)
     if dst.exists() and done.exists():
         info = json.loads(done.read_text(encoding="utf-8"))
-        log(f"   sRestore: reusing the finished one ({info.get('fps_out')} fps)")
-        return dst, info | {"reused": True}
+        if info.get("fingerprint") in (None, made_by):          # None: made before fingerprints existed
+            log(f"   sRestore: reusing the finished one ({info.get('fps_out')} fps)")
+            return dst, info | {"reused": True}
+        log("   sRestore: the finished one was made from another input: doing it again")
+        for d in (ddir, work / "deblend_trials", work / "chunks"):
+            shutil.rmtree(d, ignore_errors=True)
     ok, why = vsb.available()
     if not ok:
         return None, {"skipped": f"VapourSynth not available ({why}); blended frames stay"}
@@ -609,6 +658,7 @@ def run_deblend(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
     if not rep_.passed:
         info["skipped"] = f"sRestore output failed its guard ({', '.join(rep_.failed())}): blended frames stay"
         return None, info
+    info["fingerprint"] = made_by
     done.write_text(json.dumps(info, default=str), encoding="utf-8")
     return dst, info
 
@@ -619,8 +669,10 @@ def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print,
     or None when field handling failed (the original then stays the deliverable)."""
     stages, why = plan_prepass(p, mask_tape_noise)
     field_stages = [s for s in stages if not isinstance(s, avs.SRestore)]
+    # of the PLAN, not of what ran: a step dropped after its check failed must not look like a new plan on resume
+    made_by = fingerprint(source_id(src), [repr(s) for s in field_stages])
     if field_stages:
-        base, info = _run_field_prepass(src, work, p, field_stages, why, log)
+        base, info = _run_field_prepass(src, work, p, field_stages, why, log, made_by)
         notes = {}
         for kind, key in ((avs.ChromaShift, "chroma_check"), (avs.MaskBottom, "mask_check")):
             if base is not None and any(isinstance(s, kind) for s in field_stages) \
@@ -631,7 +683,7 @@ def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print,
                 for f in ("prepass.nut", "prepass.done"):
                     (work / f).unlink(missing_ok=True)
                 notes[key] = info.get(key)
-                base, info = (_run_field_prepass(src, work, p, field_stages, why, log) if field_stages
+                base, info = (_run_field_prepass(src, work, p, field_stages, why, log, made_by) if field_stages
                               else (src, {"plan": why}))
         info.update(notes)
     else:
@@ -648,17 +700,24 @@ def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print,
 
 
 def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: list, why: str,
-                       log=print) -> tuple[Path | None, dict]:
+                       log=print, made_by: str | None = None) -> tuple[Path | None, dict]:
     info: dict = {"plan": why}
     if not stages:
         return None, info
     dst = work / "prepass.nut"
     done = work / "prepass.done"
     if dst.exists() and done.exists() and media.colour_sidecar(dst).exists():
-        info.update(json.loads(done.read_text(encoding="utf-8")), reused=True)
-        log(f"   pre-pass: reusing the finished one ({info.get('engine')})")
-        return dst, info
-    engines = {"avisynth": avs, "vapoursynth": vsb}
+        stored = json.loads(done.read_text(encoding="utf-8"))
+        if made_by is None or stored.get("fingerprint") in (None, made_by):     # None: made before fingerprints
+            info.update(stored, reused=True)
+            log(f"   pre-pass: reusing the finished one ({info.get('engine')})")
+            return dst, info
+        # another plan (a mask asked for now, a different source under this name): everything built on the old
+        # pre-pass goes with it
+        log("   pre-pass: the finished one was made with another plan: doing it again")
+        wipe_checkpoints(work, keep=("profile.json",))
+        (work / "previews").mkdir(parents=True, exist_ok=True)
+    engines ={"avisynth": avs, "vapoursynth": vsb}
     tried: list[str] = []
     for name in config.classical_engines():
         eng = engines[name]
@@ -719,6 +778,7 @@ def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: lis
             g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in mk.gates}}
         log(f"   mask check: {'PASS' if mk.passed else 'FAIL ' + ','.join(mk.failed())}")
     if rep_.passed:
+        info["fingerprint"] = made_by
         done.write_text(json.dumps({k: v for k, v in info.items() if k != "script"}, default=str), encoding="utf-8")
     return (dst if rep_.passed else None), info
 
@@ -755,17 +815,22 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
     mark_output(out_dir)
-    work = out_dir / "work" / src.stem
+    work = out_dir / "work" / work_key(out_dir, src)
     (work / "previews").mkdir(parents=True, exist_ok=True)
     # resume checkpoints: the measured profile and the guarded choice of model (a resumed long job goes
     # straight to its unfinished chunks instead of repeating minutes of analysis and previews)
     prof_file, choice_file = work / "profile.json", work / "choice.json"
-    src_id = {"path": str(src.resolve()), "size": src.stat().st_size, "mtime": int(src.stat().st_mtime)}
+    src_id = source_id(src)
     cached = json.loads(prof_file.read_text(encoding="utf-8")) if prof_file.exists() else {}
     if cached.get("source") == src_id:
         prof = probe.VideoProfile(**cached["profile"])
         log("   profile: reused from checkpoint")
     else:
+        if cached:
+            # the file under this name changed: its pre-pass, previews, choice and chunks belong to the old one
+            log("   the source changed since the last run: its checkpoints are discarded")
+            wipe_checkpoints(work)
+            (work / "previews").mkdir(parents=True, exist_ok=True)
         prof = probe.analyze(src)
         prof_file.write_text(json.dumps({"source": src_id, "profile": prof.to_dict()}, default=str), encoding="utf-8")
         if choice_file.exists():
@@ -867,7 +932,7 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
               make: Callable[[], list], encoder: str, on_progress, log, drawn: bool = False) -> VideoRecord:
     chosen = (rec.chosen, make)
     ref_vf = None
-    dst = out_dir / f"{src.stem}_restored{output_suffix(src)}"
+    dst = out_dir / f"{work.name}_restored{output_suffix(src)}"       # work.name: the stem (see work_key)
     strength = config.TEXTURE_STRENGTH
     # texture return: the model writes a lossless intermediate (an NVENC QP 16 one lost a third of what the pass
     # gives back: flat area 0.28 vs 0.19 lossless, source 0.18), the pass writes the deliverable
@@ -921,12 +986,23 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     final = verify_video(base, dst, reference_vmaf=None, src_vf=ref_vf, drawn_faces=drawn)
     rec.final_gates = {g.name: {"status": g.status, "value": g.value, "threshold": g.threshold} for g in final.gates}
     rec.passed = final.passed
+    shown = dst
     if final.passed:
         rec.delivered = str(dst)
     else:
-        rec.notes.append(f"full output failed the guard ({final.failed()}): kept for inspection, not delivered")
+        # out of the results folder: under the deliverable's name it looked like a result to a person, and to the
+        # next scan of the folder
+        shown = work / "rejected" / dst.name
+        shown.parent.mkdir(parents=True, exist_ok=True)
+        shown.unlink(missing_ok=True)
+        try:
+            shutil.move(str(dst), str(shown))
+        except OSError:
+            shown = dst
+        rec.notes.append(f"full output failed the guard ({final.failed()}): not delivered; kept for inspection "
+                         f"in {shown}")
     # with a pre-pass the "before" frames are the deinterlaced / IVTC'd ones (same frame indices)
-    rec.sheets = [str(p) for p in review_frames(base, dst, out_dir / "sheets")]
+    rec.sheets = [str(p) for p in review_frames(base, shown, out_dir / "sheets")]
     (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
     return rec
 
