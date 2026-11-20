@@ -37,3 +37,15 @@ def safe_output_dir(output_dir: Path, *inputs: Path) -> Path:
             raise PolicyError(f"output folder {out} contains the input {i}; choose a separate folder")
     out.mkdir(parents=True, exist_ok=True)
     return out
+
+
+OUTPUT_MARKER = ".vidimg-output"
+
+
+def mark_output(folder: Path) -> None:
+    """Leave a small marker in a results folder, so a later scan knows its work folders are not the person's media."""
+    try:
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        (Path(folder) / OUTPUT_MARKER).touch()
+    except OSError:
+        pass

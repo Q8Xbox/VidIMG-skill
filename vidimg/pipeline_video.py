@@ -25,7 +25,7 @@ from .adapters import avisynth as avs
 from .adapters import free_sr, video2x
 from .adapters import vapoursynth as vsb
 from . import media
-from .adapters import AdapterResult, safe_output_dir
+from .adapters import AdapterResult, mark_output, safe_output_dir
 from . import texture as texture_pass
 from .guard.video import _ffmpeg, _frames_by_index, verify_chroma, verify_deblend, verify_mask, verify_video
 from .probe import blend as blend_probe
@@ -754,6 +754,7 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
                   mask_tape_noise: bool = False, model_strict: bool = True) -> VideoRecord:
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
+    mark_output(out_dir)
     work = out_dir / "work" / src.stem
     (work / "previews").mkdir(parents=True, exist_ok=True)
     # resume checkpoints: the measured profile and the guarded choice of model (a resumed long job goes
@@ -875,7 +876,11 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
         model_enc = "lossless" if _room_for_lossless(work, prof, base) else encoder
         # always Matroska: a full episode's lossless stream (32 GB) broke Video2X's MP4 writer at the very end
         # (error -22 while closing the file, header unreadable, 52 minutes lost); short clips never showed it
-        model_out = work / "model_out.mkv"
+        # in its own folder: a pre-pass intermediate sits directly in `work`, and writing next to an input is
+        # refused (PolicyError), so every pre-pass video without blend removal failed here
+        model_out = work / "model" / "model_out.mkv"
+        model_out.parent.mkdir(parents=True, exist_ok=True)
+        (work / "model_out.mkv").unlink(missing_ok=True)      # left by an interrupted run before this layout
         if model_enc != "lossless":
             rec.notes.append("not enough free disk space for a lossless intermediate: texture returned from the "
                              "normal encode (a little less texture kept)")

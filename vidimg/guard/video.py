@@ -267,6 +267,13 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
                     and g.value >= vt["backprojection_gross"]:
                 g.status = "warn"
             gates.append(g)
+    if not interpolated:
+        # the picture gates above only exist when frames were actually compared: without this gate a video whose
+        # frames could not be extracted passed on frame count, duration and audio alone
+        compared, need = len(sf) // 2, max(1, (len(starts) + 1) // 2)
+        gates.append(Gate("coverage", "pass" if compared >= need else "fail", compared, need,
+                          f"{compared} of {len(starts)} planned frame pairs compared"
+                          + (f" ({skipped_cuts} moved or dropped at scene cuts)" if skipped_cuts else "")))
     if flat_up:
         # over-smoothing ("denoised to death"): flat area between the lines grew vs a bicubic upscale. Advisory:
         # removing noise is legitimate, but the person should see when texture went with it
@@ -285,7 +292,7 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
         v = _vmaf(src, dst, a["width"], a["height"], min(vmaf_seconds, a["duration"]), src_vf)
         span = f"first {min(vmaf_seconds, a['duration']):.0f}s, output scaled to source"
         if v is None:
-            gates.append(Gate("vmaf", "n/a", None, None, span))
+            gates.append(Gate("vmaf", "warn", None, None, f"{span}; could not be measured (is libvmaf in ffmpeg?)"))
         elif reference_vmaf is not None:
             need = reference_vmaf - vt["vmaf_drop_max"]
             gates.append(Gate("vmaf", "pass" if v >= need else "fail", round(v, 2), round(need, 2),
@@ -299,6 +306,7 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
              "av_sync": "video/audio start offset changed: remux with media.fix_av_offset (no re-encode needed)",
              "aspect": "display aspect changed (pixel aspect lost): remux with media.fix_aspect (no re-encode needed)",
              "vmaf": "the output drifted from the source: lower enhancement strength or raise blend",
+             "coverage": "too few frames could be compared: the result cannot be confirmed, the original stays",
              "frames": "frame count changed: check interpolation/duplicate removal settings",
              "audio": "audio was dropped: map 0:a and copy it"}
     sugg = [SUGGEST.get(n) or extra.get(n) for n in failed]
