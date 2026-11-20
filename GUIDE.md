@@ -27,8 +27,8 @@ A calibrated "guard" checks every result before it is delivered. Anything the gu
 Everything that is downloaded is saved in **the VidIMG folder**. This is `%LOCALAPPDATA%\VidIMG` when you install VidIMG as a plugin, or the
 project folder itself when you clone it. So nothing is lost when the plugin is updated, and deleting this folder removes everything.
 
-Every component here is free. Each one is downloaded from its official source and checked against a SHA-256 fingerprint fixed in the code. Nothing is installed
-system-wide except FFmpeg, and only after you agree.
+Every component here is free. Each one is downloaded from its official source and checked against a SHA-256 fingerprint fixed in the code. Two things go
+outside this folder, each only after you agree: FFmpeg, and the Python packages VidIMG itself needs (`requirements.txt`), which go into the Python that runs it.
 
 | Component | Size | Source | Location | Purpose |
 |---|---|---|---|---|

@@ -8,6 +8,7 @@
   tools/vapoursynth/lock.json on first install (trust on first use); later runs refuse changes.
 
 Usage: python -m vidimg.vs_install            (install or verify)
+       python -m vidimg.vs_install --relock   (accept the current files as the new reference)
 """
 
 from __future__ import annotations
@@ -70,7 +71,11 @@ def _digest(p: Path) -> str:
     return _sha(p)
 
 
-def install(log=print) -> dict:
+VIOLATION = LOCK.with_name("lock_violation.json")
+
+
+def install(log=print, relock: bool = False) -> dict:
+    """relock: accept the files as they are now as the new reference (after a deliberate plugin update)."""
     if not PY.exists():
         log("creating tools/vs-venv")
         _run([sys.executable, "-m", "venv", VENV], check=True)
@@ -95,11 +100,19 @@ def install(log=print) -> dict:
     for f in files():
         key = str(f.relative_to(VENV)).replace("\\", "/")
         d = _digest(f)
-        if key in lock and lock[key] != d:
+        if key in lock and lock[key] != d and not relock:
             changed.append(key)
-        lock.setdefault(key, d)
+        if relock:
+            lock[key] = d
+        else:
+            lock.setdefault(key, d)
     LOCK.parent.mkdir(parents=True, exist_ok=True)
     LOCK.write_text(json.dumps(lock, indent=1, sort_keys=True), encoding="utf-8")
+    # enforced, not only reported: the engine refuses to run while a file differs from the first install
+    if changed:
+        VIOLATION.write_text(json.dumps({"changed": changed}, indent=1), encoding="utf-8")
+    else:
+        VIOLATION.unlink(missing_ok=True)
     # functional check: the plugins the backend needs load and havsfunc imports
     probe = _run([PY, "-I", "-c", "import vapoursynth as vs; c=vs.core; "
                   f"c.std.LoadAllPlugins(r'{VENV / 'Lib/site-packages/vapoursynth/plugins/vsrepo'}'); "
@@ -111,4 +124,4 @@ def install(log=print) -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(install(), indent=1))
+    print(json.dumps(install(relock="--relock" in sys.argv[1:]), indent=1))

@@ -1,7 +1,8 @@
 """First-run setup on a new Windows machine: one command installs and verifies everything VidIMG needs and
 connects it to Claude Code. Every step is idempotent (run it again to repair or verify) and every download is
-an official release checked against a pinned SHA-256. Nothing paid; nothing system-wide except, on approval,
-FFmpeg through winget.
+an official release checked against a pinned SHA-256. Nothing paid. Two things go outside the VidIMG folder, each
+only on approval: FFmpeg through winget, and the Python packages of requirements.txt into the Python that runs
+VidIMG (skipped when they are already there).
 
 Usage:
     python -m vidimg.setup                     # interactive: asks before winget and for the output folder
@@ -112,9 +113,18 @@ def step_ffmpeg(log, yes=False, check=False, **_) -> dict:
             "notes": [f"this FFmpeg build lacks {missing}: use the gyan.dev full build"] if missing else []}
 
 
-def step_python_packages(log, check=False, **_) -> dict:
+def step_python_packages(log, check=False, yes=False, **_) -> dict:
     req = config.PROJECT_ROOT / "requirements.txt"
+    have = subprocess.run([sys.executable, "-c", "import numpy, cv2, skimage, scipy, PIL, mcp"], capture_output=True)
+    if have.returncode == 0:
+        return {"ok": True, "notes": []}                  # already there: this Python is not touched
     if not check:
+        # these go into the Python that runs VidIMG. Outside a virtual environment that is the person's own
+        # Python, so it is their decision
+        if sys.prefix == sys.base_prefix and not _ask(
+                f"Install VidIMG's Python packages (requirements.txt) into {sys.executable}?", yes):
+            return {"ok": False, "notes": [f"Python packages missing; install them with: "
+                                           f"\"{sys.executable}\" -m pip install -r \"{req}\""]}
         log("  pip install -r requirements.txt")
         r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)], capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode:

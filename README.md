@@ -60,6 +60,7 @@ Open this folder in Claude Code and approve the project MCP server `vidimg` when
 
 | Command | What it does |
 |---|---|
+| `/restore <files and/or folders>` | The automatic flow: survey everything, decide per item, run, one combined report |
 | `/restore-photo <files or folders>` | Analyse, restore with guarded candidates, review page |
 | `/restore-video <video> [preview]` | Classical field handling if needed, guarded previews, full run, report |
 | `/setup-vidimg [output folder]` | Install / repair everything on this machine and connect Claude Code |
@@ -69,8 +70,9 @@ Open this folder in Claude Code and approve the project MCP server `vidimg` when
 Or ask in plain words ("restore the photos in this folder"): the `restore-media` skill
 (`.claude/skills/restore-media/SKILL.md`) holds the workflow and the approved policy.
 
-MCP tools (`vidimg/mcp_server.py`): `doctor`, `analyze_media`, `restore_photos`, `restore_video`,
-`job_status`, `list_jobs`, `cancel_job`, `resume_job`, `verify_restoration`, `compare_frames`.
+MCP tools (`vidimg/mcp_server.py`): `doctor`, `survey_media`, `decide_plan`, `run_plan` (the automatic flow),
+`analyze_media`, `restore_photos`, `restore_video`, `job_status`, `list_jobs`, `cancel_job`, `resume_job`,
+`verify_restoration`, `compare_frames`.
 Restorations run as detached background jobs (`vidimg/jobs.py`, files under `workspace/jobs/`), one GPU
 job at a time; `resume_job` continues a stopped job where it stopped.
 
@@ -82,6 +84,8 @@ Safety hook (`.claude/settings.json` → `vidimg/hooks/pretool.py`), before ever
 
 ```bash
 python -m vidimg doctor                                            # environment report
+python -m vidimg auto FILES_AND_FOLDERS [--out DIR]                # survey anything into one plan with decisions filled in
+python -m vidimg run-plan --out DIR                                # run that plan (resumable) + one combined report
 python -m vidimg restore PHOTOS_OR_FOLDERS [--out DIR] [--deblur]  # photo pipeline + review page (--deblur: opt-in, soft photos only)
 python -m vidimg restore-video IN.mp4 [--out DIR] [--preview-only] [--scale 2] [--content anime|real|auto] [--model NAME] [--engine auto|torch|mlrt]
                                                                    # video pipeline + report.html

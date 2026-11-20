@@ -189,6 +189,17 @@ def _best_threshold(values: list[tuple[float, bool]], direction: str) -> tuple[f
     return best
 
 
+# Ranges a calibrated threshold may take (--apply). Wide enough for any real collection, narrow enough that a
+# degenerate fit cannot turn a gate into "always pass" or "always fail". Chosen around the defaults, not measured.
+APPLY_BOUNDS = {
+    "identity_min": (0.60, 0.90), "identity_strict": (0.70, 0.95),
+    "landmark_drift_max": (0.02, 0.10), "landmark_drift_fail": (0.04, 0.20),
+    "face_backproj_min": (0.85, 0.99), "face_backproj_strict": (0.85, 0.99),
+    "backproj_ssim_min": (0.90, 0.995), "backproj_gross_min": (0.85, 0.98),
+    "delta_e_max": (2.0, 8.0), "hf_ratio_per_scale_warn": (5.0, 25.0),
+}
+
+
 def run(folder: Path, *, limit: int | None = None, apply: bool = False, out_root: Path | None = None,
         log=print) -> dict:
     folder = Path(folder)
@@ -240,9 +251,17 @@ def run(folder: Path, *, limit: int | None = None, apply: bool = False, out_root
             result["apply_refused"] = f"needs at least {MIN_IMAGES_TO_APPLY} photos, got {result['images']}"
         else:
             new = guard.thresholds()
+            result["apply_skipped"] = {}
             for gate, info in result["thresholds"].items():
-                if not np.isnan(info["threshold"]):
-                    new[gate] = info["threshold"]
+                t = info["threshold"]
+                if np.isnan(t):
+                    continue
+                lo, hi = APPLY_BOUNDS.get(gate, (-np.inf, np.inf))
+                if not lo <= t <= hi:
+                    # a fit on few or odd photos must not switch a gate off (or fail everything): kept as it was
+                    result["apply_skipped"][gate] = f"{t} is outside the plausible range {lo}..{hi}; kept {new.get(gate)}"
+                    continue
+                new[gate] = t
             new["calibrated"] = True
             new["calibrated_on"] = {"images": result["images"], "time": stamp, "folder": str(root)}
             config.ensure_workspace()

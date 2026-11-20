@@ -74,7 +74,13 @@ def install(log=print) -> dict:
                 _download(m["url"], dst)
             d = _sha(dst)
             if m["url"] in lock and lock[m["url"]] != d:
-                report["errors"].append(f"{key}: SHA-256 changed since first download; refusing")
+                # out of the way, not just reported: the engine uses any model file it finds under this name
+                bad = dst.with_name(dst.name + ".rejected")
+                bad.unlink(missing_ok=True)
+                dst.replace(bad)
+                report["errors"].append(f"{key}: SHA-256 differs from the recorded one; the file was set aside as "
+                                        f"{bad.name} and the model is not available (run the install again to "
+                                        "download it afresh)")
                 continue
             lock[m["url"]] = d
             report["models"][key] = {"file": dst.name, "MB": round(dst.stat().st_size / 2**20, 1), "license": m["license"]}
