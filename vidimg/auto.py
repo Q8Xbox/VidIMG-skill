@@ -296,6 +296,7 @@ def decide(out: Path, decisions: dict[str, dict], by: str = "claude") -> dict:
         bad = set(d) - allowed
         if bad:
             raise ValueError(f"{item_id}: unknown decision(s) {sorted(bad)}; allowed: {sorted(allowed)}")
+        d = _typed(item_id, d)
         if "content" in d and d["content"] not in ("auto", "anime", "real"):
             raise ValueError(f"{item_id}: content must be auto, anime or real")
         if d.get("model") is not None and d["model"] not in config.VIDEO_MODEL_CHOICES:
@@ -318,6 +319,35 @@ def decide(out: Path, decisions: dict[str, dict], by: str = "claude") -> dict:
             it["state"] = "pending"                     # a new decision is a new try
     save(plan)
     return plan
+
+
+NUMBER_KEYS = {"scale", "texture"}
+FLAG_KEYS = {"model_strict", "mask_tape_noise", "preview_only", "skip", "deblur"}
+
+
+def _typed(item_id: str, d: dict) -> dict:
+    """Decisions in the types the pipelines and the report expect. A value that arrives as text ("2", "true")
+    passed the range check and was stored as text; the run then worked and the report crashed at the very end."""
+    out = dict(d)
+    for k in NUMBER_KEYS & set(out):
+        if out[k] is None:
+            continue
+        try:
+            if isinstance(out[k], bool):
+                raise ValueError
+            n = float(out[k])
+        except (TypeError, ValueError):
+            raise ValueError(f"{item_id}: {k} must be a number, got {out[k]!r}") from None
+        out[k] = int(n) if k == "scale" and n.is_integer() else n
+    for k in FLAG_KEYS & set(out):
+        v = out[k].strip().lower() if isinstance(out[k], str) else out[k]
+        if v in (True, "true", "yes", 1):
+            out[k] = True
+        elif v in (False, "false", "no", 0):
+            out[k] = False
+        else:
+            raise ValueError(f"{item_id}: {k} must be true or false, got {out[k]!r}")
+    return out
 
 
 # ----------------------------------------------------------------------------- run

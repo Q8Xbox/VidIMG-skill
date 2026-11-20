@@ -35,6 +35,22 @@ def count_frames(path: Path) -> int | None:
     return int(s) if s.isdigit() else None
 
 
+def concat_line(path: Path) -> str:
+    """One `file` line for ffmpeg's concat demuxer. Inside its single quotes an apostrophe ends the string, so it
+    is written as '\\'' (a folder named "Dad's birthday" made every join fail after all chunks were rendered)."""
+    return "file '" + Path(path).as_posix().replace("'", "'\\''") + "'\n"
+
+
+def _rate(text: str | None) -> float:
+    """"30000/1001" -> 29.97; missing, malformed or 0/0 (ffprobe's "unknown") -> 0.0."""
+    num, _, den = (text or "").partition("/")
+    try:
+        n, d = float(num), float(den or 1)
+    except ValueError:
+        return 0.0
+    return n / d if d else 0.0
+
+
 def probe(path: Path, exact: bool = False) -> dict:
     """Stream facts used by the planners and by output verification.
     exact=True: when the container does not store the frame count (Matroska, many MP4/AVI from editors),
@@ -45,8 +61,8 @@ def probe(path: Path, exact: bool = False) -> dict:
     data = json.loads(out.stdout or "{}")
     streams = data.get("streams", [])
     v = next((s for s in streams if s.get("codec_type") == "video"), {})
-    num, _, den = (v.get("avg_frame_rate") or v.get("r_frame_rate") or "0/1").partition("/")
-    fps = float(num) / float(den or 1) if float(den or 1) else 0.0
+    # avg_frame_rate is "0/0" for some streams (single-picture or damaged headers): the nominal rate then
+    fps = _rate(v.get("avg_frame_rate")) or _rate(v.get("r_frame_rate"))
     fmt = data.get("format", {})
     duration = float(v.get("duration") or fmt.get("duration") or 0)
     stored = str(v.get("nb_frames", "")).isdigit()

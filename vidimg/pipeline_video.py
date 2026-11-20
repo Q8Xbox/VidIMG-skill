@@ -360,7 +360,7 @@ def run_chunked(base: Path, dst: Path, stages_fn: Callable[[], list], encoder: s
         done_frames += frames_want
         log(f"   chunk {i + 1}/{len(plan)} done ({start:.0f}-{start + length:.0f}s)")
     listing = cdir / "concat.txt"
-    listing.write_text("".join(f"file '{pp.as_posix()}'\n" for pp in parts), encoding="utf-8")
+    listing.write_text("".join(media.concat_line(pp) for pp in parts), encoding="utf-8")
     args = [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "concat", "-safe", "0",
             "-i", str(listing), "-i", str(base), "-map", "0:v:0", "-map", "1:a?", "-c", "copy",
             "-map_metadata", "1", *media.colour_args(media.colour_hint(base))[1]]

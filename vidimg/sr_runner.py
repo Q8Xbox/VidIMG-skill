@@ -85,7 +85,9 @@ def image_mode(spec: dict) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for inp in spec["inputs"]:
         t0 = time.monotonic()
-        src = cv2.imread(inp, cv2.IMREAD_UNCHANGED)
+        # colour + any depth, not "unchanged": that flag skips the EXIF orientation, so a phone photo taken upright
+        # went through the model lying on its side while the guard read it upright, and every candidate failed
+        src = cv2.imread(inp, cv2.IMREAD_COLOR | cv2.IMREAD_ANYDEPTH)
         if src is None:
             print(json.dumps({"input": inp, "ok": False, "error": "unreadable"}), flush=True)
             continue
