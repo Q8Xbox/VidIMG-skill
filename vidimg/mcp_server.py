@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -62,8 +63,10 @@ def _existing(path: str) -> Path:
 
 
 def _out_dir(out_dir: str | None, inputs: list[Path], kind: str) -> Path:
+    # the default folder is unique per call: a timestamp to the second gave two calls made together one folder,
+    # and each overwrote the other's record
     out = Path(out_dir).expanduser().resolve() if out_dir else \
-        config.OUTPUT_ROOT / kind / datetime.now().strftime("%Y%m%d-%H%M%S")
+        config.OUTPUT_ROOT / kind / (datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4])
     for i in inputs:
         folder = i if i.is_dir() else i.parent
         if out == folder:
