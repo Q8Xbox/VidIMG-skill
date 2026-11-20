@@ -54,6 +54,7 @@ def run(
     stdin_text: str | None = None,
     stdin_pipe=None,
     keep_lines: int = 400,
+    stall_timeout: float | None = None,
 ) -> RunResult:
     """Run a program, stream merged stdout/stderr line by line, keep the tail, log the call."""
     args = [str(a) for a in argv]
@@ -80,6 +81,8 @@ def run(
         proc.stdin.write(stdin_text)
         proc.stdin.close()
 
+    alive = [time.monotonic()]
+
     def pump() -> None:
         assert proc.stdout is not None
         # ffmpeg writes progress with '\r'; split on both so callers see every update
@@ -88,6 +91,7 @@ def run(
             chunk = proc.stdout.read(1)
             if not chunk:
                 break
+            alive[0] = time.monotonic()
             if chunk in "\r\n":
                 if buf:
                     tail.append(buf)
@@ -104,7 +108,24 @@ def run(
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()
     try:
-        rc = proc.wait(timeout=timeout)
+        if stall_timeout is None:
+            rc = proc.wait(timeout=timeout)
+        else:
+            # stall_timeout: the program is killed when it prints nothing for that long (ffmpeg prints progress
+            # while frames arrive; a worker that hangs upstream leaves it silent for ever)
+            while True:
+                try:
+                    rc = proc.wait(timeout=min(5.0, stall_timeout))
+                    break
+                except subprocess.TimeoutExpired:
+                    now = time.monotonic()
+                    if timeout is not None and now - start > timeout:
+                        raise
+                    if now - alive[0] > stall_timeout:
+                        proc.kill()
+                        rc = proc.wait()
+                        tail.append(f"[vidimg] killed: no output for {stall_timeout:.0f}s (stalled)")
+                        break
     except subprocess.TimeoutExpired:
         proc.kill()
         rc = proc.wait()

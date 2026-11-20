@@ -139,17 +139,26 @@ def video_mode(spec: dict) -> None:
                 return
             q_in.put(buf)
 
+    broken = threading.Event()
+
     def writer() -> None:
-        while (a := q_out.get()) is not None:
-            wr.write(a.tobytes())
-        wr.flush()
+        try:
+            while (a := q_out.get()) is not None:
+                wr.write(a.tobytes())
+            wr.flush()
+        except OSError:
+            # the encoder is gone (disk full, killed): keep emptying the queue so the model loop is never stuck on
+            # a full one, and let it see the flag and stop
+            broken.set()
+            while q_out.get() is not None:
+                pass
 
     tr, tw = threading.Thread(target=reader, daemon=True), threading.Thread(target=writer)
     tr.start()
     tw.start()
     n, done = 0, False
     with torch.inference_mode():
-        while not done:
+        while not done and not broken.is_set():
             bufs = []
             while len(bufs) < batch:
                 b = q_in.get()
@@ -178,6 +187,11 @@ def video_mode(spec: dict) -> None:
             n += len(bufs)
     q_out.put(None)
     tw.join()
+    if broken.is_set():
+        # not an error by itself: a chunk's encoder stops reading once its frames are in (it trims the overlap).
+        # Whether the run worked is judged by the encoder's exit code and the frame count, in the caller
+        sys.stderr.write("output pipe closed before the last frame: the encoder stopped\n")
+        return
     sys.stderr.write(json.dumps({"frames": n}) + "\n")
 
 
