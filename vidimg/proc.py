@@ -115,7 +115,7 @@ def run(
             # while frames arrive; a worker that hangs upstream leaves it silent for ever)
             while True:
                 try:
-                    rc = proc.wait(timeout=min(5.0, stall_timeout))
+                    rc = proc.wait(timeout=min(1.0, stall_timeout))
                     break
                 except subprocess.TimeoutExpired:
                     now = time.monotonic()
