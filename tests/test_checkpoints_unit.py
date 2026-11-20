@@ -97,6 +97,7 @@ def test_prepass_from_another_plan_is_not_reused(tmp_path, monkeypatch):
     base, info = pv._run_field_prepass(tmp_path / "s.mpg", work, prof, [stage], "mask", lambda *_: None, "aaaa")
     assert base == pre and info["reused"]                   # same plan: reused
     monkeypatch.setattr(pv.config, "classical_engines", lambda: [])
+    monkeypatch.setattr(pv, "_ffmpeg", lambda: "ffmpeg")              # the fallback's command is stubbed below
     monkeypatch.setattr(pv.avs, "_rate", lambda p: (None, 0, {}))
     monkeypatch.setattr(pv.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 1, "stderr": "no"})())
     base, info = pv._run_field_prepass(tmp_path / "s.mpg", work, prof, [stage], "mask", lambda *_: None, "bbbb")
