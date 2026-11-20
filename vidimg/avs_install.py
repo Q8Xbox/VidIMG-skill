@@ -79,7 +79,7 @@ def _extract(archive: Path, into: Path) -> None:
         return
     if SEVEN_ZIP.exists():
         import subprocess
-        r = subprocess.run([str(SEVEN_ZIP), "x", "-y", f"-o{into}", str(archive)], capture_output=True, text=True,
+        r = subprocess.run([str(SEVEN_ZIP), "x", "-y", f"-o{into}", str(archive)], capture_output=True, text=True, encoding="utf-8", errors="replace",
                            stdin=subprocess.DEVNULL)
         if r.returncode != 0:
             raise RuntimeError(f"7-Zip failed on {archive.name}: {r.stderr.strip() or r.stdout[-300:]}")

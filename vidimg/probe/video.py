@@ -67,7 +67,7 @@ def _filter_log(src: Path, vf: str, seconds: float) -> str:
     out = subprocess.run(
         [_system_ffmpeg(), "-hide_banner", "-nostats", "-t", f"{seconds:g}", "-i", str(src), "-vf", vf,
          "-an", "-f", "null", "-"],
-        capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=900, errors="replace",
+        capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=900, errors="replace",
     )
     return out.stderr
 
@@ -127,7 +127,7 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
     info = media.probe(path)
     span = min(sample_seconds, info["duration"] or sample_seconds)
     fmt = subprocess.run([media.ffprobe(), "-v", "error", "-show_entries", "format=bit_rate", "-of",
-                          "default=nw=1:nk=1", str(path)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                          "default=nw=1:nk=1", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     try:
         bitrate = round(int(fmt.stdout.strip()) / 1000, 1)
     except ValueError:

@@ -14,7 +14,7 @@ _ffmpeg = media.ffmpeg
 
 
 def _run(args: list[str], timeout: int = 1800) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout, errors="replace")
+    return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=timeout, errors="replace")
 
 
 def _metrics(gt: Path, out: Path, gt_vf: str = "") -> dict:

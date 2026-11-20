@@ -40,7 +40,7 @@ def system_ffmpeg() -> str | None:
     exe = shutil.which("ffmpeg")
     if not exe:
         return None
-    r = subprocess.run([exe, "-hide_banner", "-demuxers"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    r = subprocess.run([exe, "-hide_banner", "-demuxers"], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     return exe if re.search(r"^\s*D\s+avisynth\b", r.stdout, re.M) else None
 
 
@@ -67,7 +67,7 @@ def _rate(path: Path) -> tuple[Fraction, int, dict]:
     r = subprocess.run([ff, "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
                         "stream=r_frame_rate,avg_frame_rate,nb_read_packets,field_order,pix_fmt,color_range,color_space,"
                         "color_transfer,color_primaries", "-of", "json", str(path)],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     s = json.loads(r.stdout or "{}").get("streams", [{}])[0]
     def frac(text) -> Fraction:                  # "0/0" is ffprobe's "unknown": Fraction() raises on it
         try:

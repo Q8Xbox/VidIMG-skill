@@ -26,7 +26,7 @@ def _gpu() -> Check:
     if not smi:
         return Check("gpu", "warn", "nvidia-smi not found: the open models fall back to the CPU (very slow)")
     out = subprocess.run([smi, "--query-gpu=name,memory.total,driver_version,compute_cap", "--format=csv,noheader"],
-                         capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL).stdout.strip()
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL).stdout.strip()
     return Check("gpu", "ok", out, {"nvidia_smi": out})
 
 
@@ -43,7 +43,7 @@ def _engine_checks() -> list[Check]:
     if ok:
         r = subprocess.run([str(free_sr.PYTHON), "-I", "-c", "import torch;print(torch.__version__, torch.cuda.is_available(), "
                             "torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"],
-                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=120)
         cuda = "True" in r.stdout
         out.append(Check("ai_engine", "ok" if cuda else "warn",
                          f"PyTorch {r.stdout.strip()}; {len(free_sr.manifest())} open models"
@@ -52,8 +52,8 @@ def _engine_checks() -> list[Check]:
         out.append(Check("ai_engine", "fail", why))
     ff = shutil.which("ffmpeg")
     if ff:
-        filt = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout
-        dmx = subprocess.run([ff, "-hide_banner", "-demuxers"], capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout
+        filt = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout
+        dmx = subprocess.run([ff, "-hide_banner", "-demuxers"], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout
         miss = [n for n, ok_ in (("libvmaf", " libvmaf " in filt), ("idet", " idet " in filt), ("scdet", " scdet " in filt))
                 if not ok_]
         out.append(Check("ffmpeg", "fail" if miss else "ok", f"{ff}" + (f"; missing filters {miss}" if miss else "")
@@ -74,7 +74,7 @@ def doctor(**_) -> dict:
     config.ensure_workspace()
     checks = [Check("mode", "ok", "free tools only (no paid software)"), *_engine_checks(), _gpu()]
     if config.VIDEO2X_EXE.exists():
-        out = subprocess.run([str(config.VIDEO2X_EXE), "-l"], capture_output=True, text=True, timeout=60,
+        out = subprocess.run([str(config.VIDEO2X_EXE), "-l"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                              stdin=subprocess.DEVNULL)
         dev = out.stdout.strip().splitlines()[0] if out.stdout.strip() else "no Vulkan device listed"
         checks.append(Check("video2x", "ok" if "0." in dev else "warn", f"{dev} (anime content, RIFE interpolation)"))

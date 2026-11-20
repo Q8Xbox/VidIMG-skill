@@ -85,7 +85,7 @@ def return_texture(ref: np.ndarray, out: np.ndarray, strength: float, scale: flo
 def _probe_stream(path: Path) -> dict:
     r = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries",
                         "stream=width,height,color_space,color_range,color_primaries,color_transfer,"
-                        "sample_aspect_ratio", "-of", "json", str(path)], capture_output=True, text=True)
+                        "sample_aspect_ratio", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return (json.loads(r.stdout or "{}").get("streams") or [{}])[0]
 
 
@@ -123,7 +123,7 @@ def apply(base: Path, restored: Path, dst: Path, strength: float, encoder: str =
                              stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
     exact = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries",
                             "stream=r_frame_rate", "-of", "csv=p=0", str(restored)], capture_output=True,
-                           text=True).stdout.strip() or f"{ri['fps']:g}"
+                           text=True, encoding="utf-8", errors="replace").stdout.strip() or f"{ri['fps']:g}"
     tags = [x for k, opt in (("color_space", "-colorspace"), ("color_range", "-color_range"),
                              ("color_primaries", "-color_primaries"), ("color_transfer", "-color_trc"))
             if so.get(k) and so[k] not in ("unknown", "reserved") for x in (opt, so[k])]

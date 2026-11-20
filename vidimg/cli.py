@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from . import config, env, media
@@ -35,7 +36,22 @@ def _emit(result: AdapterResult, as_json: bool) -> int:
     return 0 if result.ok else 1
 
 
+def utf8_output() -> None:
+    """Never die on a name the output cannot encode. Piped or redirected output (a log file, another program) used
+    the Windows code page, so a progress line with an Arabic file name stopped the run with UnicodeEncodeError.
+    A real console prints any character already; there only the error handling is relaxed."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    utf8_output()
     ap = argparse.ArgumentParser(prog="vidimg", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     sub = ap.add_subparsers(dest="cmd", required=True)

@@ -102,7 +102,7 @@ def default_out_dir(src_dir: Path, episodes: list[tuple[int, Path]], scale: floa
 def _probe(path: Path) -> dict:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                         "stream=width,height,nb_frames,r_frame_rate:format=duration", "-of", "json", str(path)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
     j = json.loads(r.stdout or "{}")
     s, f = (j.get("streams") or [{}])[0], j.get("format") or {}
     num, _, den = (s.get("r_frame_rate") or "0/1").partition("/")

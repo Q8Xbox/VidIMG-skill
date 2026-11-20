@@ -74,7 +74,7 @@ def step_system(log, **_) -> dict:
     vc = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32" / "vcruntime140_1.dll"
     smi = shutil.which("nvidia-smi")
     gpu = subprocess.run([smi, "--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"],
-                         capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip() if smi else ""
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.strip() if smi else ""
     config.HOME.mkdir(parents=True, exist_ok=True)
     disk = shutil.disk_usage(config.HOME.anchor).free // 2**30
     notes = []
@@ -106,7 +106,7 @@ def step_ffmpeg(log, yes=False, check=False, **_) -> dict:
     ff = shutil.which("ffmpeg")
     if not ff:
         return {"ok": False, "notes": ["FFmpeg not found: winget install Gyan.FFmpeg (then reopen the terminal)"]}
-    filters = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True).stdout
+    filters = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     missing = [f for f in ("libvmaf", "idet", "scdet", "bwdif") if f" {f} " not in filters]
     return {"ok": not missing and bool(shutil.which("ffprobe")), "path": ff,
             "notes": [f"this FFmpeg build lacks {missing}: use the gyan.dev full build"] if missing else []}
@@ -116,10 +116,10 @@ def step_python_packages(log, check=False, **_) -> dict:
     req = config.PROJECT_ROOT / "requirements.txt"
     if not check:
         log("  pip install -r requirements.txt")
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req)], capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode:
             return {"ok": False, "notes": [r.stderr.strip()[-400:]]}
-    probe = subprocess.run([sys.executable, "-c", "import numpy, cv2, skimage, scipy, PIL, mcp"], capture_output=True, text=True)
+    probe = subprocess.run([sys.executable, "-c", "import numpy, cv2, skimage, scipy, PIL, mcp"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     return {"ok": probe.returncode == 0, "notes": [probe.stderr.strip()[-300:]] if probe.returncode else []}
 
 
@@ -156,7 +156,7 @@ def step_video2x(log, check=False, **_) -> dict:
         z.unlink(missing_ok=True)                                       # 188 MB; the extracted files are what runs
     if not exe.exists():
         return {"ok": False, "notes": ["Video2X 6.4.0 missing (needed for cartoons/anime and RIFE only)"]}
-    out = subprocess.run([str(exe), "-l"], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    out = subprocess.run([str(exe), "-l"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, stdin=subprocess.DEVNULL)
     dev = (out.stdout.strip().splitlines() or ["no Vulkan device listed"])[0]
     return {"ok": out.returncode == 0, "device": dev,
             "notes": [] if out.returncode == 0 else ["Video2X did not start: install the VC++ x64 runtime and the GPU driver"]}
