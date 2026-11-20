@@ -247,7 +247,7 @@ def _restore_tail(src: Path, dst: Path, codec: str, pix: str | None, extra: dict
     # explicit duration for the first part: the concat demuxer otherwise offsets the tail by the container's
     # duration, which Video2X writes wrong
     first = have["frames"] * fr.denominator / fr.numerator
-    lst.write_text(f"file '{vonly.as_posix()}'\nduration {first:.6f}\nfile '{tail.as_posix()}'\n", encoding="utf-8")
+    lst.write_text(f"{media.concat_line(vonly)}duration {first:.6f}\n{media.concat_line(tail)}", encoding="utf-8")
     cp = subprocess.run([ff, "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(dst),
                          "-map", "0:v", "-map", "1:a?", "-map", "1:s?", "-map", "1:t?", "-c", "copy", str(joined)],
                         capture_output=True, stdin=subprocess.DEVNULL)

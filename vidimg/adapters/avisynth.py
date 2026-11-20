@@ -69,8 +69,13 @@ def _rate(path: Path) -> tuple[Fraction, int, dict]:
                         "color_transfer,color_primaries", "-of", "json", str(path)],
                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
     s = json.loads(r.stdout or "{}").get("streams", [{}])[0]
-    fps = Fraction(s.get("r_frame_rate") or "0/1")
-    avg = Fraction(s.get("avg_frame_rate") or "0/1")
+    def frac(text) -> Fraction:                  # "0/0" is ffprobe's "unknown": Fraction() raises on it
+        try:
+            return Fraction(text or "0/1")
+        except (ZeroDivisionError, ValueError):
+            return Fraction(0)
+
+    fps, avg = frac(s.get("r_frame_rate")), frac(s.get("avg_frame_rate"))
     # phone clips are often VFR with an r_frame_rate far from the real cadence: trust avg then
     if avg and (not fps or abs(float(fps) - float(avg)) > 0.5):
         fps = avg.limit_denominator(1001)
