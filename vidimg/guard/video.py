@@ -62,6 +62,7 @@ def _frames_by_index(path: Path, indices: list[int], folder: Path, tag: str, pre
 
 
 CUT_SHIFT = 6
+INTERP_SEARCH = 60      # source frames searched for one that survives unchanged in an interpolated output
 
 
 def _is_cut(a: np.ndarray, b: np.ndarray) -> bool:
@@ -244,16 +245,33 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
     samples = samples or plan_samples(a["duration"])
     starts =[int(n * (i + 0.5) / samples) for i in range(samples)]
     starts = [s for s in starts if s + 1 < n]
+    ratio = b["frames"] / max(1, src_frames)
+    if interpolated:
+        # frame interpolation keeps the source's frames and adds new ones between them: source frame s is output
+        # frame s x ratio wherever that is a whole number (every frame at 2x, every second one at 24 -> 60).
+        # Those are compared like any other result; before, an interpolated file passed with no picture gate
+        def kept(s: int) -> int | None:
+            return next((c for c in range(s, min(n - 2, s + INTERP_SEARCH)) if abs(c * ratio - round(c * ratio)) < 0.02),
+                        None)
+        starts = sorted({k for k in map(kept, starts) if k is not None})
     with tempfile.TemporaryDirectory(prefix="vidimg_vg_") as tmp:
         t = Path(tmp)
         # Each sample needs a clean pair (s, s+1) away from scene cuts: at a cut the source and a
         # faithful output legitimately differ (an interlaced cut frame holds one field from each
         # scene; a temporal model blends across it). Candidates s and s+CUT_SHIFT are extracted
         # with a neighbour on each side, and the first one with no cut nearby is used.
-        options = {s: [o for o in (s, s + CUT_SHIFT) if o - 1 >= 0 and o + 2 < n] for s in starts}
+        options = {s: [o for o in ((s,) if interpolated else (s, s + CUT_SHIFT)) if o - 1 >= 0 and o + 2 < n]
+                   for s in starts}
         want = sorted({i for opts in options.values() for o in opts for i in (o - 1, o, o + 1, o + 2)})
         sf_map = _frames_by_index(src, want, t, "s", src_vf)
-        df_map = _frames_by_index(dst, want, t, "d") if not interpolated else {}
+        if interpolated:
+            picks = sorted({round(o * ratio) for opts in options.values() for o in opts})
+            got = _frames_by_index(dst, picks, t, "d")
+            # the pair's second frame is not needed (no flicker measure between interpolated frames)
+            df_map = {o: got[round(o * ratio)] for opts in options.values() for o in opts if round(o * ratio) in got}
+            df_map |= {o + 1: p for o, p in list(df_map.items())}
+        else:
+            df_map = _frames_by_index(dst, want, t, "d")
         worst: dict[str, Gate] = {}
         fail_frames: dict[str, int] = {}
         se, de = [], []
@@ -315,13 +333,13 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
                     and g.value >= vt["backprojection_gross"]:
                 g.status = "warn"
             gates.append(g)
-    if not interpolated:
-        # the picture gates above only exist when frames were actually compared: without this gate a video whose
-        # frames could not be extracted passed on frame count, duration and audio alone
-        compared, need = len(sf) // 2, max(1, (len(starts) + 1) // 2)
-        gates.append(Gate("coverage", "pass" if compared >= need else "fail", compared, need,
-                          f"{compared} of {len(starts)} planned frame pairs compared"
-                          + (f" ({skipped_cuts} moved or dropped at scene cuts)" if skipped_cuts else "")))
+    # the picture gates above only exist when frames were actually compared: without this gate a video whose
+    # frames could not be extracted passed on frame count, duration and audio alone
+    compared, need = len(sf) // 2, max(1, (len(starts) + 1) // 2)
+    gates.append(Gate("coverage", "pass" if compared >= need else "fail", compared, need,
+                      f"{compared} of {len(starts)} planned frame pairs compared"
+                      + (f" ({skipped_cuts} moved or dropped at scene cuts)" if skipped_cuts else "")
+                      + (f"; interpolated x{ratio:.3g}: only frames kept from the source" if interpolated else "")))
     if flat_up:
         # over-smoothing ("denoised to death"): flat area between the lines grew vs a bicubic upscale. Advisory:
         # removing noise is legitimate, but the person should see when texture went with it
@@ -463,6 +481,7 @@ CHROMA_RESIDUAL_MAX = 0.6       # luma px left beyond the clean baseline after t
 LUMA_UNCHANGED_PSNR = 60.0      # dB: a chroma-only pass must leave the luma bit-identical (measured 138 dB)
 
 
+CHROMA_MIN_FRAMES = 3           # of the 12 sampled: fewer readings confirm nothing
 CHROMA_UNTOUCHED_SLACK = 0.3   # luma px a component that was not corrected may drift in the re-measurement
 
 
@@ -475,7 +494,14 @@ def verify_chroma(src: Path, dst: Path, *, moved: dict, before: dict, luma_must_
     from ..probe import chroma
 
     gates: list[Gate] = []
-    after = chroma.analyze(Path(dst)).excess()
+    measured = chroma.analyze(Path(dst))
+    after = measured.excess()
+    if measured.frames < CHROMA_MIN_FRAMES:
+        # nothing could be read back: the default reading is "no shift", which passed without any evidence
+        gates.append(Gate("chroma_aligned", "fail", None, CHROMA_RESIDUAL_MAX,
+                          f"re-measured on {measured.frames} frame(s), at least {CHROMA_MIN_FRAMES} needed: "
+                          "the correction cannot be confirmed"))
+        return GuardReport(False, gates, ["chroma correction could not be confirmed: run without it"], False)
     worst, detail = 0.0, []
     for k in ("u", "v"):
         for i in (0, 1):
