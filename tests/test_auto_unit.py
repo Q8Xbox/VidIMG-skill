@@ -20,12 +20,15 @@ def test_scan_sorts_photos_videos_and_series(tmp_path):
     _touch(tmp_path, "a.jpg", "sub/b.PNG", "clip.mp4", "notes.txt",
            "Show/Show - 01.mkv", "Show/Show - 02.mkv", "Show/Show - 03.mkv", "Show/extras.mkv",
            "Two/Ep 1.mp4", "Two/Ep 2.mp4",                                   # two episodes: not a series
-           "old_restored.mp4", "Show/VidIMG x2 - Episodes 01-03/Show - 01_restored.mkv", "run/work/tmp.mkv")
+           "old_restored.mp4", "Show/VidIMG x2 - Episodes 01-03/Show - 01_restored.mkv",
+           "run/work/clip/profile.json", "run/work/clip/chunks/c0.mkv",      # a video run's work folder
+           "new/.vidimg-output", "new/survey/contact_1.jpg", "new/previews/p.mp4",
+           "Work/holiday.mp4", "Previews/sheets/scan.jpg")                   # the person's own folders
     found = auto.scan([tmp_path])
-    assert sorted(p.name for p in found["photos"]) == ["a.jpg", "b.PNG"]
-    assert sorted(p.name for p in found["videos"]) == ["Ep 1.mp4", "Ep 2.mp4", "clip.mp4", "extras.mkv"]
+    assert sorted(p.name for p in found["photos"]) == ["a.jpg", "b.PNG", "scan.jpg"]
+    assert sorted(p.name for p in found["videos"]) == ["Ep 1.mp4", "Ep 2.mp4", "clip.mp4", "extras.mkv", "holiday.mp4"]
     assert len(found["series"]) == 1 and [n for n, _ in found["series"][0]["episodes"]] == [1, 2, 3]
-    assert found["ignored"] == 4                                             # notes.txt and VidIMG's own outputs
+    assert found["ignored"] == 8                 # notes.txt, a marker, a checkpoint and VidIMG's own outputs
     with pytest.raises(FileNotFoundError):
         auto.scan([tmp_path / "missing"])
 

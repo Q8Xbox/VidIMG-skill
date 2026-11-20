@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import config, guard
-from .adapters import free_sr, video2x
+from .adapters import free_sr, mark_output, video2x
 from .probe import image as probe
 
 
@@ -107,6 +107,7 @@ def restore_image(src: Path, out_dir: Path, *, policy: config.Policy = config.DE
     out_dir = Path(out_dir)
     work = out_dir / "attempts" / src.stem
     work.mkdir(parents=True, exist_ok=True)
+    mark_output(out_dir)
     prof = probe.analyze(src)
     rec = RestoreRecord(str(src), prof.to_dict(), "", None, False)
     stage_in = src

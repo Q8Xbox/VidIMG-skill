@@ -284,6 +284,9 @@ def eye_green_shift(ref: np.ndarray, out: np.ndarray, ref_faces) -> float | None
     return max(drops, default=0.0)
 
 
+HF_REF_FLOOR = 1.0      # Laplacian variance on 8-bit luma; noise of 0.22 levels (sigma) already gives this much
+
+
 def _hf(img: np.ndarray) -> float:
     return float(cv2.Laplacian(_luma(img), cv2.CV_64F).var())
 
@@ -406,7 +409,9 @@ def verify_image(original: Path, result: Path, *, th: dict | None = None,
                       "mean CIEDE2000 (input vs result downscaled)"))
 
     # 5. hallucination: high-frequency energy added beyond what upscaling plausibly restores
-    ratio = _hf(out) / max(1e-6, _hf(ref))
+    # the reference's energy has a floor: on a black or flat frame (a fade) it is near zero, and the faintest
+    # encoder noise in the result read as a ratio in the hundreds and rejected a good episode
+    ratio = _hf(out) / max(HF_REF_FLOOR, _hf(ref))
     limit = th["hf_ratio_per_scale_warn"] * max(1.0, scale)
     status = "pass" if ratio <= limit else ("fail" if ratio > 2 * limit else "warn")
     gates.append(Gate("hallucination", status, round(ratio, 2), round(limit, 2),

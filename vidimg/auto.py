@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import config
+from .adapters import OUTPUT_MARKER, mark_output
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp"}
 VIDEO_EXT = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv", ".ts", ".mts", ".m2ts", ".3gp", ".webm",
@@ -45,12 +46,25 @@ DONE = ("delivered", "kept_original", "partly_delivered", "skipped", "preview_do
 
 
 # ----------------------------------------------------------------------------- finding the work
+OWN_FOLDERS = {"work", "attempts", "rounds", "sheets", "comparison", "previews", "deblend_trials", "survey", "items"}
+
+
+def _results_folder(d: Path) -> bool:
+    """`d` is a folder VidIMG wrote results into: it carries the marker, or (results from before the marker) a
+    plan, photo checkpoints or a video's work checkpoints."""
+    try:
+        return ((d / OUTPUT_MARKER).exists() or (d / "plan.json").exists() or any(d.glob("items/*.json"))
+                or any(d.glob("attempts/*/record.json")) or any(d.glob("work/*/profile.json")))
+    except OSError:
+        return False
+
+
 def _is_output(p: Path) -> bool:
-    """VidIMG's own results and work folders are never inputs."""
-    parts = {x.lower() for x in p.parts}
-    return (p.stem.endswith("_restored") or any(x.startswith("vidimg x") or x.startswith("vidimg restored")
-                                                for x in parts)
-            or bool(parts & {"work", "attempts", "rounds", "sheets", "comparison", "previews", "deblend_trials"}))
+    """VidIMG's own results and work folders are never inputs. A folder named like one of the tool's work folders
+    only counts inside a results folder: a person's own "Work" or "Previews" folder holds their media."""
+    if p.stem.endswith("_restored") or any(x.lower().startswith(("vidimg x", "vidimg restored")) for x in p.parts):
+        return True
+    return any(d.name.lower() in OWN_FOLDERS and _results_folder(d.parent) for d in p.parents)
 
 
 def scan(paths: list[Path]) -> dict:
@@ -162,6 +176,7 @@ def survey(paths: list[Path], out: Path, log: Callable[[str], None] = print) -> 
             raise ValueError(f"output folder {out} is the folder of the originals; choose another")
     found = scan(paths)
     (out / "survey").mkdir(parents=True, exist_ok=True)
+    mark_output(out)
     items: list[dict] = []
     log(f"found {len(found['photos'])} photos, {len(found['videos'])} videos, {len(found['series'])} series "
         f"({found['ignored']} other files ignored)")

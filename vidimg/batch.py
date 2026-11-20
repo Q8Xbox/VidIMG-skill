@@ -21,7 +21,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import config, guard, proc
-from .adapters import free_sr
+from .adapters import free_sr, mark_output
 from .pipeline import Attempt, RestoreRecord, choose_scale, deblur_step, plan_candidates
 from .probe import image as probe
 
@@ -144,10 +144,13 @@ def _judge(it: Item, label: str, params: dict, output: Path | None, error: str |
 def _run_group(items: list[Item], label: str, params: dict, rnd: int, out: Path, log) -> None:
     """One model call for every photo in the group; a photo missing from the output is retried alone."""
     folder = out / "rounds" / f"r{rnd}_{label.replace('+', '_')}_{hashlib.sha1(json.dumps(params, sort_keys=True).encode()).hexdigest()[:6]}"
-    folder.mkdir(parents=True, exist_ok=True)
     suffix = f"_{label.replace('+', '_')}"
     inputs = [Path(it.state["stage_in"]) for it in items]
-    marker = folder / ("call-" + hashlib.sha1("|".join(sorted(str(i) for i in inputs)).encode()).hexdigest()[:8] + ".done")
+    # one folder per model call: outputs are named by input stem, and photos with the same stem run in separate
+    # calls of the same round; in a shared folder the later call overwrote the earlier photo's picture
+    folder = folder / ("call-" + hashlib.sha1("|".join(sorted(str(i) for i in inputs)).encode()).hexdigest()[:8])
+    folder.mkdir(parents=True, exist_ok=True)
+    marker = folder / "call.done"
     if marker.exists():                                      # resume: this exact call already finished
         per = json.loads(marker.read_text(encoding="utf-8")).get("seconds_per_image")
         log(f"   reusing finished model call ({label}, {len(items)} photos)")
@@ -174,13 +177,20 @@ def _run_group(items: list[Item], label: str, params: dict, rnd: int, out: Path,
 def restore_images(files: list[Path], out: Path, *, policy: config.Policy = config.DEFAULT_POLICY, log=print) -> list[dict]:
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    mark_output(out)
     items = [Item(Path(f), out) for f in files]
-    resumed = sum(1 for it in items if it.state["status"] != "new")
+    resumed = sum(1 for it in items if it.state["status"] not in ("new", "failed"))
     log(f"{len(items)} photos" + (f" ({resumed} resumed from checkpoints)" if resumed else ""))
     for n, it in enumerate(items, 1):
-        if it.state["status"] == "new":
+        if it.state["status"] in ("new", "failed"):         # a photo that broke last time is tried again
             log(f"[{n}/{len(items)}] analyse {it.src.name}")
-            _prepare(it, policy, log)
+            it.state.update(status="new", attempts=[], notes=[])
+            try:
+                _prepare(it, policy, log)
+            except Exception as e:  # noqa: BLE001  (one unreadable photo must not stop the others)
+                it.state.update(status="failed", attempts=[])
+                it.state["notes"] = [f"could not be prepared ({type(e).__name__}: {e}): the original stays the deliverable"]
+                log(f"   {it.src.name}: skipped, {type(e).__name__}: {e}")
             it.save()
     rnd = 0
     while True:
