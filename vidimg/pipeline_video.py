@@ -338,7 +338,7 @@ def scene_cuts(video: Path, work: Path, log=print) -> list[float]:
         return json.loads(cache.read_text(encoding="utf-8"))
     log("   scanning scene cuts for chunk boundaries")
     cp = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(video), "-an", "-vf",
-                         "scale=480:-2,scdet=threshold=10", "-f", "null", "-"], capture_output=True, text=True,
+                         "scale=480:-2,scdet=threshold=10", "-f", "null", "-"], capture_output=True, text=True, encoding="utf-8",
                         stdin=subprocess.DEVNULL, errors="replace")
     import re as _re
     cuts = sorted({round(float(t), 3) for t in _re.findall(r"lavfi\.scd\.time:\s*([0-9.]+)", cp.stderr)})
@@ -410,7 +410,7 @@ def run_chunked(base: Path, dst: Path, stages_fn: Callable[[], list], encoder: s
             "-map_metadata", "1", *media.colour_args(media.colour_hint(base))[1]]
     if dst.suffix.lower() in (".mp4", ".mov", ".m4v"):
         args += ["-movflags", "+write_colr+faststart"]
-    cp = subprocess.run([*args, str(dst)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    cp = subprocess.run([*args, str(dst)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     if cp.returncode != 0 or not dst.exists():
         return AdapterResult(False, error="join failed: " + cp.stderr.strip()[-300:])
     sync = media.fix_av_offset(base, dst)
@@ -748,7 +748,7 @@ def _run_field_prepass(src: Path, work: Path, p: probe.VideoProfile, stages: lis
         info.update(engine="ffmpeg-fallback", reason=reason, filter=vf)
         cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src),
                              "-map", "0:v:0", "-map", "0:a?", "-c:a", "copy", "-map_metadata", "0", "-vf", vf,
-                             *avs.INTERMEDIATE, str(dst)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                             *avs.INTERMEDIATE, str(dst)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
         info.update(ok=cp.returncode == 0 and dst.exists(), error=cp.stderr.strip()[-300:] or None)
         if info["ok"]:
             info["colour"] = media.write_colour_sidecar(dst, colour)
@@ -932,13 +932,13 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
               make: Callable[[], list], encoder: str, on_progress, log, drawn: bool = False) -> VideoRecord:
     chosen = (rec.chosen, make)
     ref_vf = None
-    dst = out_dir / f"{work.name}_restored{output_suffix(src)}"       # work.name: the stem (see work_key)
+    dst = out_dir / f"{work.name}_restored{output_suffix(src, encoder)}"   # work.name: the stem (see work_key)
     strength = config.TEXTURE_STRENGTH
     # texture return: the model writes a lossless intermediate (an NVENC QP 16 one lost a third of what the pass
     # gives back: flat area 0.28 vs 0.19 lossless, source 0.18), the pass writes the deliverable
     model_out, model_enc = dst, encoder
     if strength > 0:
-        model_enc = "lossless" if _room_for_lossless(work, prof, base) else encoder
+        model_enc = "lossless" if _room_for_lossless(work, prof, base, make()) else encoder
         # always Matroska: a full episode's lossless stream (32 GB) broke Video2X's MP4 writer at the very end
         # (error -22 while closing the file, header unreadable, 52 minutes lost); short clips never showed it
         # in its own folder: a pre-pass intermediate sits directly in `work`, and writing next to an input is
@@ -972,7 +972,7 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
             rec.notes.append(f"texture return failed ({t.error}): delivered without it")
             cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(model_out),
                                  "-map", "0", "-c:a", "copy", *media.encoder_args(encoder), "-map_metadata", "0",
-                                 str(dst)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                                 str(dst)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
             if cp.returncode != 0 or not dst.exists():
                 rec.notes.append("full run failed: could not write the deliverable from the model output")
                 return rec
@@ -1003,17 +1003,55 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
                          f"in {shown}")
     # with a pre-pass the "before" frames are the deinterlaced / IVTC'd ones (same frame indices)
     rec.sheets = [str(p) for p in review_frames(base, shown, out_dir / "sheets")]
+    if rec.passed and not config.KEEP_WORK:
+        freed = clean_work(work)
+        if freed:
+            log(f"   intermediates removed ({freed / 1e9:.1f} GB); VIDIMG_KEEP_WORK=1 keeps them")
     (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
     return rec
 
 
-def _room_for_lossless(work: Path, prof: probe.VideoProfile, base: Path) -> bool:
+BULKY = ("chunks", "model", "previews", "deblend", "deblend_trials", "rejected", "prepass.nut", "prepass.nut.colour.json", "prepass.lwi",
+         "cuts.json")
+
+
+def clean_work(work: Path) -> int:
+    """After a delivered result: remove the large intermediates of this video (only names this pipeline creates;
+    the small records stay: profile, choice, record). Returns the bytes freed. A result the guard rejected keeps
+    everything for inspection, and an interrupted run keeps everything for the resume."""
+    freed = 0
+    for name in BULKY:
+        p = Path(work) / name
+        try:
+            if p.is_dir():
+                freed += sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+                shutil.rmtree(p, ignore_errors=True)
+            elif p.exists():
+                freed += p.stat().st_size
+                p.unlink()
+        except OSError:
+            pass
+    return freed
+
+
+def _out_pixels(stages: list, w: int, h: int) -> int:
+    """Pixels per output frame for these stages (x2 when they do not say)."""
+    for s in stages:
+        if hasattr(s, "out_size"):
+            ow, oh = s.out_size(w, h)
+            return ow * oh
+        if getattr(s, "scale", None):
+            return round(w * h * float(s.scale) ** 2)
+    return w * h * 4
+
+
+def _room_for_lossless(work: Path, prof: probe.VideoProfile, base: Path, stages: list | None = None) -> bool:
     """A lossless intermediate needs about 0.3 bytes per output pixel (measured 0.23 at 1440x1152); ask for twice
-    that, plus room for the deliverable."""
-    import shutil
+    that, plus room for the deliverable. The output size comes from the stages: assuming x2 said "enough room" for
+    a x4 run that needs four times as much."""
     info = media.probe(base)
     frames = info["frames"] or round(prof.duration * (prof.fps or 25))
-    out_px = (info["width"] or prof.width) * (info["height"] or prof.height) * 4     # x2 typical; x4 pixels
+    out_px = _out_pixels(stages or [], info["width"] or prof.width, info["height"] or prof.height)
     need = frames * out_px * 0.3 * 2
     try:
         return shutil.disk_usage(work).free > need
@@ -1040,13 +1078,15 @@ def frames_sheet(src: Path, dst: Path, n: int = 6) -> Path | None:
     return dst if cp.returncode == 0 and dst.exists() else None
 
 
-def output_suffix(src: Path) -> str:
+def output_suffix(src: Path, encoder: str = "hevc10") -> str:
     """MP4 unless the source carries streams MP4 cannot hold or plays badly: subtitles (ASS/SSA break the
-    MP4 muxer outright: Sample05), font attachments, PCM audio (Sample03.avi). Those go to Matroska."""
+    MP4 muxer outright: Sample05), font attachments, PCM audio (Sample03.avi). Those go to Matroska.
+    The codec decides too: MP4 cannot hold FFV1 (Matroska) and ProRes belongs in QuickTime (.mov); both were
+    offered as encoders and then failed at the very end of the run."""
     info = media.probe(src)
     if info["subtitle_codecs"] or info["attachments"] or any(str(c).startswith("pcm_") for c in info["audio_codecs"]):
         return ".mkv"
-    return ".mp4"
+    return {"ffv1": ".mkv", "prores": ".mov"}.get(encoder, ".mp4")
 
 
 def carry_side_streams(src: Path, dst: Path) -> str | None:
@@ -1058,7 +1098,7 @@ def carry_side_streams(src: Path, dst: Path) -> str | None:
     tmp = dst.with_name(dst.stem + ".side.mkv")
     cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(dst), "-i", str(src),
                          "-map", "0:v", "-map", "0:a?", "-map", "1:s?", "-map", "1:t?", "-c", "copy",
-                         "-map_metadata", "0", str(tmp)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                         "-map_metadata", "0", str(tmp)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     if cp.returncode != 0 or not tmp.exists():
         tmp.unlink(missing_ok=True)
         return "subtitles could not be carried over: " + cp.stderr.strip()[-200:]

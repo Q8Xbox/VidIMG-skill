@@ -30,7 +30,7 @@ def count_frames(path: Path) -> int | None:
     """Exact video frame count by counting packets (demux only, no decode: seconds even for long files)."""
     r = subprocess.run([ffprobe(), "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
                         "stream=nb_read_packets", "-of", "csv=p=0", str(path)],
-                       capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600, stdin=subprocess.DEVNULL)
     s = r.stdout.strip().split(",")[0]
     return int(s) if s.isdigit() else None
 
@@ -57,7 +57,7 @@ def probe(path: Path, exact: bool = False) -> dict:
     count it instead of estimating duration x fps, and repair a duration that includes a non-zero start
     time (a clip cut from the middle with its timestamps kept reported 25120 frames for 120)."""
     out = subprocess.run([ffprobe(), "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
-                         capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, stdin=subprocess.DEVNULL)
     data = json.loads(out.stdout or "{}")
     streams = data.get("streams", [])
     v = next((s for s in streams if s.get("codec_type") == "video"), {})
@@ -125,7 +125,7 @@ def fix_aspect(src: Path, dst: Path) -> str | None:
         args += ["-bsf:v", f"{bsf}=sample_aspect_ratio={sar.numerator}/{sar.denominator}"]
     if dst.suffix.lower() in (".mp4", ".mov", ".m4v"):
         args += ["-movflags", "+write_colr+faststart"]
-    cp = subprocess.run([*args, str(tmp)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    cp = subprocess.run([*args, str(tmp)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     if cp.returncode != 0 or not tmp.exists():
         tmp.unlink(missing_ok=True)
         return "display aspect could not be restored: " + cp.stderr.strip()[-200:]
@@ -161,7 +161,7 @@ def fix_av_offset(src: Path, dst: Path) -> str | None:
             "-i", str(dst), "-map", "0:v", "-map", "1:a?", "-map", "1:s?", "-map", "1:t?", "-c", "copy", "-map_metadata", "1"]
     if dst.suffix.lower() in (".mp4", ".mov", ".m4v"):
         args += ["-movflags", "+write_colr+faststart"]
-    cp = subprocess.run([*args, str(tmp)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    cp = subprocess.run([*args, str(tmp)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     if cp.returncode != 0 or not tmp.exists():
         tmp.unlink(missing_ok=True)
         return f"audio/video offset could not be restored ({shift:+.3f} s): " + cp.stderr.strip()[-200:]

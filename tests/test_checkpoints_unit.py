@@ -121,7 +121,7 @@ def test_rejected_output_leaves_the_results_folder(tmp_path, monkeypatch):
         return AdapterResult(True, [dst])
 
     monkeypatch.setattr(pv, "run_engine", engine)
-    monkeypatch.setattr(pv, "output_suffix", lambda src: ".mp4")
+    monkeypatch.setattr(pv, "output_suffix", lambda src, enc=None: ".mp4")
     monkeypatch.setattr(pv.config, "TEXTURE_STRENGTH", 0.0)
     monkeypatch.setattr(pv, "carry_side_streams", lambda s, d: None)
     monkeypatch.setattr(pv.media, "fix_aspect", lambda s, d: None)

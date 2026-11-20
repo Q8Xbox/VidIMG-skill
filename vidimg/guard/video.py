@@ -129,7 +129,7 @@ def _vmaf(src: Path, dst: Path, w: int, h: int, seconds: float, src_vf: str | No
     graph = graph.replace(f"{idx}[d]", f"trim=end_frame={n},{idx}[d]").replace(f"{idx}[s]", f"trim=end_frame={n},{idx}[s]")
     out = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(src),
                           "-i", str(dst), "-lavfi", graph, "-f", "null", "-"],
-                         capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=3600, errors="replace")
+                         capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=3600, errors="replace")
     found = re.findall(r"VMAF score:\s*([0-9.]+)", out.stderr)
     return float(found[-1]) if found else None
 
@@ -148,7 +148,7 @@ def _vmaf_spread(src: Path, dst: Path, w: int, h: int, windows: list[tuple[int, 
     with tempfile.TemporaryDirectory(prefix="vidimg_vmaf_") as tmp:      # relative log path: no drive-colon escaping
         subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(Path(src).resolve()), "-i",
                         str(Path(dst).resolve()), "-lavfi", graph, "-fps_mode", "passthrough", "-f", "null", "-"],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=4 * 3600, errors="replace",
+                       capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL, timeout=4 * 3600, errors="replace",
                        cwd=tmp)
         log = Path(tmp) / "vmaf.json"
         try:
@@ -207,7 +207,7 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
     # duration still looked right, the file did not play right)
     pts = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries",
                           "packet=pts_time", "-read_intervals", "%+#40", "-of", "csv=p=0", str(dst)],
-                         capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.split()
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.split()
     # first field only: ffprobe adds empty columns for frames with side data (x265 grain-tune output: "0.000000,")
     pts = [x.split(",")[0] for x in pts]
     vals = sorted(float(x) for x in pts if x not in ("N/A", ""))
@@ -215,7 +215,7 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
     # B-frames were all distinct yet shuffled the frames on playback (Sample03, before --max-b-frames 0)
     fts = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=pts_time",
                           "-read_intervals", "%+#40", "-of", "csv=p=0", str(dst)],
-                         capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.split()
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.split()
     fvals = [float(f) for f in (x.split(",")[0] for x in fts) if f not in ("N/A", "")]
     if len(vals) >= 3:
         rising = all(b > a for a, b in zip(fvals, fvals[1:])) if len(fvals) >= 3 else True

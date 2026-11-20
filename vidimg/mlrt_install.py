@@ -103,7 +103,7 @@ def install(log=print) -> dict:
             MODELS.mkdir(parents=True, exist_ok=True)
             spec = MODELS / ".export_spec.json"
             spec.write_text(json.dumps({"models": todo}), encoding="utf-8")
-            r = subprocess.run([str(SR_PY), "-I", str(EXPORTER), str(spec)], capture_output=True, text=True)
+            r = subprocess.run([str(SR_PY), "-I", str(EXPORTER), str(spec)], capture_output=True, text=True, encoding="utf-8", errors="replace")
             spec.unlink(missing_ok=True)
             for ln in r.stdout.splitlines():
                 if ln.startswith("{"):
@@ -124,7 +124,7 @@ def probe() -> dict:
     code = ("import json, vapoursynth as vs; c = vs.core; "
             f"c.std.LoadPlugin({str(PLUGIN)!r}); v = c.ort.Version(); "
             "print(json.dumps({k: (x.decode() if isinstance(x, bytes) else str(x)) for k, x in v.items()}))")
-    r = subprocess.run([str(VS_PY), "-I", "-c", code], capture_output=True, text=True)
+    r = subprocess.run([str(VS_PY), "-I", "-c", code], capture_output=True, text=True, encoding="utf-8", errors="replace")
     try:
         return {"ok": r.returncode == 0, **json.loads(r.stdout.strip().splitlines()[-1])}
     except (ValueError, IndexError):

@@ -84,14 +84,14 @@ def install(log=print) -> dict:
     if not PY.exists():
         log("  creating tools/sr-venv")
         subprocess.run([sys.executable, "-m", "venv", str(VENV)], check=True)
-    have = subprocess.run([str(PY), "-c", "import torch, spandrel; print(torch.__version__)"], capture_output=True, text=True)
+    have = subprocess.run([str(PY), "-c", "import torch, spandrel; print(torch.__version__)"], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if have.returncode != 0 or "+cu" not in have.stdout:
         log("  installing PyTorch (CUDA) + spandrel: about 3 GB")
         subprocess.run([str(PY), "-m", "pip", "install", "-q", TORCH, "--index-url", TORCH_INDEX], check=True)
         subprocess.run([str(PY), "-m", "pip", "install", "-q", *PIP_PINS], check=True)
     probe = subprocess.run([str(PY), "-c", "import torch; print(torch.__version__, torch.cuda.is_available(), "
                             "torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'cpu')"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     report["runtime"] = probe.stdout.strip()
     report["gpu"] = "True" in probe.stdout
     report["ok"] = not report["errors"] and report["gpu"]

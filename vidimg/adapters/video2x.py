@@ -181,12 +181,12 @@ def _fix_timestamps(src: Path, dst: Path) -> str | None:
     from . import avisynth as _avs
     pts = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time",
                           "-read_intervals", "%+#40", "-of", "csv=p=0", str(dst)],
-                         capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.split()
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.split()
     vals = [float(x) for x in pts if x not in ("N/A", "")]
     if len(vals) >= 3 and len(set(vals)) == len(vals) and all(b > a for a, b in zip(sorted(vals), sorted(vals)[1:])):
         return None                                          # sane: distinct, increasing
     bfr = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=has_b_frames",
-                          "-of", "csv=p=0", str(dst)], capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+                          "-of", "csv=p=0", str(dst)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.strip()
     if bfr not in ("", "0"):
         # packet order is not display order: N/rate stamps would shuffle frames (happened to Sample03 before
         # --max-b-frames 0); leave it broken so the guard's timestamps gate rejects it
@@ -197,7 +197,7 @@ def _fix_timestamps(src: Path, dst: Path) -> str | None:
     expr = f"N*{den}/({num}*TB)"
     cp = subprocess.run([media.ffmpeg(), "-v", "error", "-y", "-i", str(dst), "-map", "0", "-c", "copy",
                          "-bsf:v", f"setts=pts={expr}:dts={expr}", str(tmp)],
-                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     if cp.returncode != 0 or not tmp.exists():
         tmp.unlink(missing_ok=True)
         return "video timestamps are broken and could not be re-stamped: " + cp.stderr.strip()[-200:]
@@ -229,7 +229,7 @@ def _restore_tail(src: Path, dst: Path, codec: str, pix: str | None, extra: dict
         enc += ["-profile:v", "main10"]
     enc += ["-bf", "0"]
     tb = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=time_base",
-                         "-of", "csv=p=0", str(dst)], capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+                         "-of", "csv=p=0", str(dst)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.strip()
     if dst.suffix.lower() in (".mp4", ".mov", ".m4v") and "/" in tb:
         # the tail must share the main file's time base: concat copies timestamps without rescaling them
         enc += ["-video_track_timescale", tb.split("/")[1]]
@@ -255,7 +255,7 @@ def _restore_tail(src: Path, dst: Path, codec: str, pix: str | None, extra: dict
         return f"{missing} frame(s) missing at the end; tail join failed"
     # no B-frames in our encodes: even timestamps N/rate are exact, whatever the parts carried
     bfr = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=has_b_frames",
-                          "-of", "csv=p=0", str(joined)], capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+                          "-of", "csv=p=0", str(joined)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.strip()
     if bfr == "0":
         expr = f"N*{fr.denominator}/({fr.numerator}*TB)"
         even = work / f"even{dst.suffix}"
@@ -265,7 +265,7 @@ def _restore_tail(src: Path, dst: Path, codec: str, pix: str | None, extra: dict
             even.replace(joined)
     vend = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time",
                            "-read_intervals", "99999999%", "-of", "csv=p=0", str(joined)],
-                          capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.split()
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.split()
     last = max((float(x) for x in vend if x not in ("N/A", "")), default=0.0)
     expect = (want - 1) * fr.denominator / fr.numerator
     if last and abs(last - expect) > 1.0:

@@ -41,7 +41,7 @@ def _sha(p: Path) -> str:
 
 
 def _run(args: list, **kw) -> subprocess.CompletedProcess:
-    return subprocess.run([str(a) for a in args], capture_output=True, text=True, stdin=subprocess.DEVNULL,
+    return subprocess.run([str(a) for a in args], capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL,
                           errors="replace", **kw)
 
 

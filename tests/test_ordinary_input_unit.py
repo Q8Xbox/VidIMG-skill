@@ -81,3 +81,50 @@ def test_decisions_given_as_text_are_stored_in_their_types(tmp_path):
     for bad in ({"scale": "big"}, {"scale": True}, {"skip": "maybe"}, {"scale": "9"}):
         with pytest.raises(ValueError):
             auto.decide(tmp_path, {"v1": bad})
+
+
+def test_container_can_hold_the_chosen_codec(monkeypatch):
+    from vidimg import pipeline_video as pv
+
+    fake = {"subtitle_codecs": [], "attachments": 0, "audio_codecs": ["aac"]}
+    monkeypatch.setattr(media, "probe", lambda p, exact=False: dict(fake))
+    assert [pv.output_suffix(Path("a.mp4"), e) for e in ("hevc10", "h264", "ffv1", "prores")] == \
+        [".mp4", ".mp4", ".mkv", ".mov"]
+    fake["subtitle_codecs"] = ["ass"]                       # subtitles need Matroska, which holds ProRes as well
+    assert pv.output_suffix(Path("a.mkv"), "prores") == ".mkv"
+    assert set(media.ENCODERS) >= {"hevc10", "h264", "ffv1", "prores"}
+
+
+def test_tool_output_is_read_as_utf8():
+    import re
+
+    root = Path(__file__).parent.parent / "vidimg"
+    for f in root.rglob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        for m in re.finditer(r"text=True", text):
+            call = text[m.start(): m.start() + 400]
+            assert 'encoding="utf-8"' in call, f"{f.name}: a text-reading call without UTF-8 near offset {m.start()}"
+
+
+def test_intermediates_go_after_delivery_and_small_records_stay(tmp_path):
+    from vidimg import pipeline_video as pv
+
+    work = tmp_path / "work" / "clip"
+    for name in ("chunks/c0000.mp4", "model/model_out.mkv", "previews/src_0.mkv", "deblend/deblend.nut",
+                 "prepass.nut", "prepass.nut.colour.json", "cuts.json", "profile.json", "choice.json", "record.json",
+                 "prepass.done"):
+        p = work / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x" * 100)
+    assert pv.clean_work(work) == 700
+    assert sorted(p.name for p in work.iterdir()) == ["choice.json", "prepass.done", "profile.json", "record.json"]
+    assert pv.clean_work(work) == 0
+
+
+def test_disk_estimate_follows_the_real_output_size():
+    from vidimg import pipeline_video as pv
+    from vidimg.adapters import video2x
+
+    assert pv._out_pixels([video2x.AnimeSR(scale=2)], 720, 576) == 720 * 576 * 4
+    assert pv._out_pixels([video2x.AnimeSR(scale=4)], 720, 576) == 720 * 576 * 16
+    assert pv._out_pixels([], 720, 576) == 720 * 576 * 4

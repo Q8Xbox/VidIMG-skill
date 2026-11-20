@@ -96,6 +96,9 @@ VIDEO_ENGINE = os.environ.get("VIDIMG_VIDEO_ENGINE", "auto")
 # back (0 = off, 1 = all the model removed). Every model flattens painted backgrounds and grain ("denoised to death",
 # Doom9); at 1 the flat area came back to the source's level with the lines kept sharp.
 TEXTURE_STRENGTH = float(os.environ.get("VIDIMG_TEXTURE", "1.0"))
+# Intermediates of a delivered video (pre-pass, chunks, previews) are deleted once the guard has passed the result:
+# they are several times the size of the deliverable, per episode. VIDIMG_KEEP_WORK=1 keeps them.
+KEEP_WORK = os.environ.get("VIDIMG_KEEP_WORK", "").strip().lower() in ("1", "true", "yes")
 
 # Video2X processors that must never touch real human faces (benchmark: identity 0.77-0.81).
 VIDEO2X_ANIME_ONLY = frozenset({"realesrgan", "realcugan", "libplacebo"})

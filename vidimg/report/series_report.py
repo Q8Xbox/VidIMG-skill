@@ -27,7 +27,7 @@ from .compare import VIDEO_GATE_NAMES
 def _stream(path: Path) -> dict:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                         "stream=width,height,sample_aspect_ratio,display_aspect_ratio,codec_name,pix_fmt"
-                        ":format=duration,size,bit_rate", "-of", "json", str(path)], capture_output=True, text=True)
+                        ":format=duration,size,bit_rate", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
     j = json.loads(r.stdout or "{}")
     s, f = (j.get("streams") or [{}])[0], j.get("format") or {}
     a, _, b = (s.get("sample_aspect_ratio") or "1:1").partition(":")
