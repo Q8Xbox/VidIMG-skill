@@ -133,7 +133,16 @@ def run_stage(src: Path, dst: Path, st: AnimeSR, encoder: str = "hevc10", **_) -
         notes = [n for n in (_fix_timestamps(src, dst), _restore_tail(src, dst, codec, pix, extra)) if n]
         if notes:
             r.details = {**(r.details or {}), "repairs": notes}
+        # a file that ends early is not a result: Video2X can stop short and still leave a playable file, which
+        # then went through the texture pass and the final encode before the guard's frame count refused it
+        want, have = media.probe(src, exact=True)["frames"], media.probe(dst, exact=True)["frames"]
+        if want and want - have > TAIL_MAX:
+            return AdapterResult(False, error=f"Video2X output is incomplete: {have} of {want} frames", run=r.run,
+                                 details=r.details)
     return r
+
+
+TAIL_MAX = 4        # frames Video2X is known to drop at the very end (2 measured); more than this is a cut-off file
 
 
 # decoders that hand Video2X 6.4.0 frames without usable timestamps: its output then had every timestamp at 0
@@ -204,7 +213,7 @@ def _restore_tail(src: Path, dst: Path, codec: str, pix: str | None, extra: dict
     from .. import media
     want, have = media.probe(src, exact=True)["frames"], media.probe(dst, exact=True)
     missing = want - have["frames"]
-    if not 0 < missing <= 4:
+    if not 0 < missing <= TAIL_MAX:
         return None
     # the SOURCE's exact rate: Video2X's own output rate fields can be wrong (b001: avg 15.98 fps for 29.97 content,
     # which placed the rebuilt tail at 2706 s in a 1443 s video)
