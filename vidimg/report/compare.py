@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from .. import imgfile  # noqa: E402
 
 from .. import faces, guard
 
@@ -28,8 +29,8 @@ def _fit(img: np.ndarray, w: int) -> np.ndarray:
 
 
 def sheet(original: Path, restored: Path, out: Path, title: str = "") -> Path:
-    src = cv2.imread(str(original))
-    res = cv2.imread(str(restored))
+    src = imgfile.imread(str(original))
+    res = imgfile.imread(str(restored))
     h, w = res.shape[:2]
     big = cv2.resize(src, (w, h), interpolation=cv2.INTER_CUBIC)   # fair "before": same size, bicubic
     half = SHEET_WIDTH // 2
@@ -53,7 +54,7 @@ def sheet(original: Path, restored: Path, out: Path, title: str = "") -> Path:
         rows.append(row[:, :SHEET_WIDTH])
     img = np.vstack(rows)
     out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    imgfile.imwrite(str(out), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
     return out
 
 
@@ -65,6 +66,12 @@ _STYLE = """:root{{--bg:#f6f7f9;--fg:#1d2330;--card:#fff;--line:#dfe3ea}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#14171c;--fg:#e8ebf0;--card:#1d2128;--line:#2c323c}}}}
 body{{background:var(--bg);color:var(--fg);font-family:system-ui,"Segoe UI",Tahoma,sans-serif;margin:0;padding:16px;line-height:1.6}}
 main{{max-width:1840px;margin:auto}} section{{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}}"""
+
+
+def _url(rel: str) -> str:
+    """A relative link for an HTML attribute: a "#" or "%" in a file name otherwise cuts or corrupts the link."""
+    from urllib.parse import quote
+    return html.escape(quote(rel, safe="/"))
 
 
 def review_page(records: list[dict], sheets: dict[str, Path], out: Path) -> Path:
@@ -81,7 +88,8 @@ def review_page(records: list[dict], sheets: dict[str, Path], out: Path) -> Path
         status = "✅ Passed the guard" if r["passed"] else "⛔ Did not pass the guard: the original stays as it is"
         last = next((a for a in reversed(r["attempts"]) if a.get("gates")), None)
         idv = last["gates"].get("identity", {}).get("value") if last else None
-        img = f'<img src="{html.escape(sheets[name].name)}" loading="lazy">' if name in sheets else ""
+        shot = sheets.get(r["source"]) or sheets.get(name)          # by path; by name for older callers
+        img = f'<img src="{_url(shot.name)}" loading="lazy">' if shot else ""
         cards.append(f"""<section><h2>{html.escape(name)}</h2><p class="st">{status}</p>
 <p>Plan: {html.escape(r['plan'])}</p><p>Attempts: {html.escape(tried)}</p>
 <p>Identity match (worst face): <b>{idv if idv is not None else '—'}</b></p>{img}</section>""")
@@ -93,6 +101,7 @@ img{{width:100%;height:auto;border-radius:6px}} h2{{margin:0 0 4px;font-size:1.0
 <body><main><h1>Photo restoration review</h1>
 <p>{passed} of {len(records)} photos passed the fidelity guard. Each card shows the original enlarged (left) and the result
 (right), then the faces zoomed in: before / after. You decide: do the faces still look the same?</p>{''.join(cards)}</main></body></html>"""
+    out.parent.mkdir(parents=True, exist_ok=True)      # no sheet was made (every photo failed): the folder is not there
     out.write_text(page, encoding="utf-8")
     return out
 
@@ -115,7 +124,7 @@ def video_page(rec: dict, out: Path) -> Path:
         f"<li>{html.escape(a['label'])}: {a['passed_previews']}/{a['previews']} previews · VMAF {a.get('vmaf')}"
         f"{' · ' + html.escape('; '.join(','.join(f) for f in a['failed'] if f)) if any(a['failed']) else ''}</li>"
         for a in rec.get("attempts") or [])
-    imgs = "".join(f'<img src="{html.escape(Path(s).relative_to(out.parent).as_posix() if Path(s).is_relative_to(out.parent) else Path(s).as_uri())}" loading="lazy">'
+    imgs = "".join(f'<img src="{_url(Path(s).relative_to(out.parent).as_posix()) if Path(s).is_relative_to(out.parent) else html.escape(Path(s).as_uri())}" loading="lazy">'
                    for s in rec.get("sheets") or [])
     if rec.get("passed"):
         status = "✅ Passed the guard and delivered"
@@ -139,5 +148,6 @@ img{{width:100%;height:auto;border-radius:6px;margin:8px 0}}</style></head>
 <ul>{atts}</ul>{f'<ul>{notes}</ul>' if notes else ''}</section>
 {f'<section><h2>Final guard checks</h2><table><tr><th></th><th>Check</th><th>Measured</th><th>Limit</th></tr>{rows}</table></section>' if rows else ''}
 {f'<section><h2>Frames to compare (before / after)</h2>{imgs}</section>' if imgs else ''}</main></body></html>"""
+    out.parent.mkdir(parents=True, exist_ok=True)      # no sheet was made (every photo failed): the folder is not there
     out.write_text(page, encoding="utf-8")
     return out

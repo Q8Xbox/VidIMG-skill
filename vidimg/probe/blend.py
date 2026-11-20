@@ -147,7 +147,8 @@ def read_gray(src: Path, start: float, seconds: float, *, bob: str | None = None
             if len(buf) < size:
                 break
             y = np.frombuffer(buf, "<u2").reshape(oh, width)
-            yield ((y.astype(np.uint32) + 128) >> 8).astype(np.uint8)
+            # capped: 65535 + 128 rounds to 256, which wrapped pure white to black on full-range sources
+            yield np.minimum((y.astype(np.uint32) + 128) >> 8, 255).astype(np.uint8)
     finally:
         p.stdout.close()
         p.wait()

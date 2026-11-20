@@ -18,6 +18,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from . import imgfile  # noqa: E402
 
 from . import config, faces, guard
 from . import media
@@ -55,7 +56,7 @@ def pick_segments(video: Path, n: int = 3, probes: int = 24) -> list[tuple[float
             p = Path(tmp) / f"p{i}.png"
             _run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", str(video), "-frames:v", "1",
                   "-y", str(p)], 120)
-            img = cv2.imread(str(p))
+            img = imgfile.imread(str(p))
             if img is None:
                 continue
             fs = faces.detect(img, score=guard.FACE_SCORE)
@@ -93,7 +94,7 @@ def _gt_identity(gt: Path, out: Path, samples: int = 4) -> float | None:
         for i in idx:
             if i not in gm or i not in om:
                 continue
-            g, o = cv2.imread(str(gm[i])), cv2.imread(str(om[i]))
+            g, o = imgfile.imread(str(gm[i])), imgfile.imread(str(om[i]))
             o = cv2.resize(o, (g.shape[1], g.shape[0]), interpolation=cv2.INTER_AREA)
             fs = faces.detect(g, score=guard.FACE_SCORE)
             got = faces.match(fs, faces.detect(o, score=0.4))

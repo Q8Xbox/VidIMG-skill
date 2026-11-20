@@ -3,6 +3,8 @@ by index (timestamp pairing mis-paired MKV vs NUT frames) at 10-bit, and SFace f
 
 from __future__ import annotations
 
+from . import imgfile
+
 import re
 import subprocess
 from pathlib import Path
@@ -52,7 +54,7 @@ def _identity(gt: Path, out: Path, gt_vf: str | None = None, samples: int = 6) -
         for i in idx:
             if i not in gm or i not in om:
                 continue
-            g, o = cv2.imread(str(gm[i])), cv2.imread(str(om[i]))
+            g, o = imgfile.imread(str(gm[i])), imgfile.imread(str(om[i]))
             o = cv2.resize(o, (g.shape[1], g.shape[0]), interpolation=cv2.INTER_AREA)
             fs = faces.detect(g, score=guard.FACE_SCORE)
             got = faces.match(fs, faces.detect(o, score=0.4))

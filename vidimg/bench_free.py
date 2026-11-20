@@ -19,6 +19,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import cv2
+from . import imgfile  # noqa: E402
 
 from . import config, faces, guard
 from .adapters import free_sr
@@ -44,8 +45,8 @@ def run(run_dir: Path = RUN, log=print) -> dict:
             outs = stage / c.name
             if c.kwargs["model"] is None:
                 for p in inputs:
-                    img = cv2.imread(str(p))
-                    cv2.imwrite(str(run_dir / p.stem / f"lr_{c.name}.png"),
+                    img = imgfile.imread(str(p))
+                    imgfile.imwrite(str(run_dir / p.stem / f"lr_{c.name}.png"),
                                 cv2.resize(img, (img.shape[1] * factor, img.shape[0] * factor), interpolation=cv2.INTER_LANCZOS4))
                 continue
             res = free_sr.upscale_images(inputs, outs, model=c.kwargs["model"], scale=factor, suffix=f"_{c.name}")
@@ -58,9 +59,9 @@ def run(run_dir: Path = RUN, log=print) -> dict:
         log(f"{c.name}: done")
     records = []
     for d in dirs:
-        gt = cv2.imread(str(d / "in" / "gt.png"))
+        gt = imgfile.imread(str(d / "in" / "gt.png"))
         lr_p = d / "in" / "lr.jpg"
-        bic = cv2.resize(cv2.imread(str(lr_p)), (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_CUBIC)
+        bic = cv2.resize(imgfile.imread(str(lr_p)), (gt.shape[1], gt.shape[0]), interpolation=cv2.INTER_CUBIC)
         has_faces = bool(faces.available() and faces.detect(gt, score=guard.FACE_SCORE))
         for c in CANDIDATES:
             out_p = d / f"lr_{c.name}.png"

@@ -79,6 +79,23 @@ def _resize(img: np.ndarray, w: int, h: int) -> np.ndarray:
     return cv2.resize(img, (w, h), interpolation=interp)
 
 
+def _imread(path, flags):
+    """cv2.imread for any path: OpenCV opens files with the Windows code page and returns None for a name outside
+    it (an Arabic folder); Python reads the bytes, OpenCV decodes them (same flags, same EXIF handling)."""
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        return None
+    return cv2.imdecode(data, flags) if data.size else None
+
+
+def _imwrite(path, img) -> None:
+    ok, buf = cv2.imencode(Path(path).suffix, img)
+    if not ok:
+        raise OSError(f"could not encode {path}")
+    buf.tofile(str(path))
+
+
 def image_mode(spec: dict) -> None:
     d, half = load(spec["model"])
     out_dir = Path(spec["out_dir"])
@@ -87,7 +104,7 @@ def image_mode(spec: dict) -> None:
         t0 = time.monotonic()
         # colour + any depth, not "unchanged": that flag skips the EXIF orientation, so a phone photo taken upright
         # went through the model lying on its side while the guard read it upright, and every candidate failed
-        src = cv2.imread(inp, cv2.IMREAD_COLOR | cv2.IMREAD_ANYDEPTH)
+        src = _imread(inp, cv2.IMREAD_COLOR | cv2.IMREAD_ANYDEPTH)
         if src is None:
             print(json.dumps({"input": inp, "ok": False, "error": "unreadable"}), flush=True)
             continue
@@ -107,7 +124,7 @@ def image_mode(spec: dict) -> None:
         tw, th = round(src.shape[1] * spec["scale"]), round(src.shape[0] * spec["scale"])
         out = _resize(out, tw, th)
         dst = out_dir / f"{Path(inp).stem}{spec['suffix']}.png"
-        cv2.imwrite(str(dst), cv2.cvtColor((np.clip(out, 0, 1) * 65535 + 0.5).astype(np.uint16), cv2.COLOR_RGB2BGR))
+        _imwrite(dst, cv2.cvtColor((np.clip(out, 0, 1) * 65535 + 0.5).astype(np.uint16), cv2.COLOR_RGB2BGR))
         print(json.dumps({"input": inp, "ok": True, "output": str(dst), "seconds": round(time.monotonic() - t0, 2)}),
               flush=True)
 

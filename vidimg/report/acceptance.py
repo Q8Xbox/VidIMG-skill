@@ -35,7 +35,8 @@ def _asset(src: str | Path, name: str) -> str | None:
     dst = ROOT / "assets" / name
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(p, dst)
-    return f"assets/{html.escape(name)}"
+    from urllib.parse import quote
+    return "assets/" + html.escape(quote(name, safe="/"))
 
 
 def _gates_table(gates: dict, names: dict) -> str:
@@ -47,7 +48,7 @@ def _gates_table(gates: dict, names: dict) -> str:
 
 def _verdict(item_id: str) -> str:
     opts = (("same", "Same person and features"), ("changed", "Something in the face changed"), ("unsure", "Not sure"))
-    radios = "".join(f"<label><input type='radio' name='{item_id}' value='{v}'> {t}</label>" for v, t in opts)
+    radios = "".join(f"<label><input type='radio' name='{html.escape(item_id)}' value='{v}'> {t}</label>" for v, t in opts)
     return (f"<div class='verdict' data-id='{html.escape(item_id)}'>{radios}"
             f"<input type='text' class='note' placeholder='Note (optional)'></div>")
 

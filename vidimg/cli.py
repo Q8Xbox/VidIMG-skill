@@ -241,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
             f = Path(d["source"])
             shown = d["delivered"] or next((x["output"] for x in d["attempts"] if x.get("output")), None)
             if shown:
-                sheets[f.name] = compare.sheet(f, Path(shown), out / "sheets" / f"{f.stem}.jpg")
+                # keyed by the whole path, named by the photo's own id: two photos called IMG_1 shared one sheet
+                sheets[str(f)] = compare.sheet(f, Path(shown), out / "sheets" / f"{batch._key(f)}.jpg")
             print(f"{f.name}: {'PASSED -> ' + d['delivered'] if d['passed'] else 'NOT PASSED: ' + '; '.join(d['notes'])}",
                   flush=True)
         (out / "records.json").write_text(json.dumps(records, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
@@ -250,8 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if a.cmd == "analyze":
-        video_ext = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv", ".ts", ".mts", ".m2ts"}
-        if a.path.suffix.lower() in video_ext:
+        if a.path.suffix.lower() in media.VIDEO_EXT:
             from .probe import video as pv
             from . import pipeline_video
             prof = pv.analyze(a.path)
@@ -268,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "verify":
         from . import guard
         from .guard.video import verify_video
-        if a.original.suffix.lower() in {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".ts"}:
+        if a.original.suffix.lower() in media.VIDEO_EXT:
             rep = verify_video(a.original, a.result, interpolated=a.interpolated)
         else:
             rep = guard.verify_image(a.original, a.result)

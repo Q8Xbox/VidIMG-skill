@@ -1144,5 +1144,7 @@ def review_frames(src: Path, dst: Path, folder: Path, n: int = 3) -> list[Path]:
         dm = _frames_by_index(dst, idx, Path(tmp), "d")
         for k, i in enumerate(idx):
             if i in sm and i in dm:
-                out.append(compare.sheet(sm[i], dm[i], folder / f"{src.stem}_frame{k + 1}.jpg"))
+                # named after the result: after a pre-pass `src` is always "prepass", so every video in one
+                # output folder wrote the same three files
+                out.append(compare.sheet(sm[i], dm[i], folder / f"{dst.stem}_frame{k + 1}.jpg"))
     return out

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from .. import imgfile  # noqa: E402
 
 from .. import faces
 from .. import media
@@ -84,7 +85,8 @@ def _idet(src: Path, seconds: float) -> tuple[float, str | None, float]:
     if not found:
         return 0.0, None, repeated
     tff, bff, prog = map(int, found[-1])
-    if tff + bff + prog == 0:
+    if tff + bff + prog < IDET_MIN_FRAMES:
+        # a handful of frames (a one-second clip): 3 "interlaced" of 4 sent it through a deinterlacer
         return 0.0, None, repeated
     total = tff + bff + prog
     order = "tff" if tff >= max(bff, prog) else "bff" if bff >= prog else "progressive"
@@ -116,10 +118,20 @@ def _sample_frames(src: Path, info: dict, n: int = 6) -> list[np.ndarray]:
             p = Path(tmp) / f"f{i}.png"
             subprocess.run([_system_ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(src),
                             "-frames:v", "1", "-y", str(p)], stdin=subprocess.DEVNULL, timeout=120)
-            img = cv2.imread(str(p))
+            img = imgfile.imread(str(p))
             if img is not None:
                 frames.append(img)
     return frames
+
+
+def _anime(frames: list[np.ndarray]) -> float:
+    """Median over the sampled frames that show something: black and single-colour frames (fades) do not vote."""
+    from .image import FLAT_FRAME_STD
+    seen = [anime_score(f) for f in frames if float(np.std(f)) >= FLAT_FRAME_STD]
+    return round(float(np.median(seen)), 3) if seen else 0.0
+
+
+IDET_MIN_FRAMES = 12            # fewer judged frames than this say nothing about the field structure
 
 
 def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
@@ -168,7 +180,7 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
         scene_cuts=_scenes(path, span), duplicate_ratio=_duplicates(path, span, round(span * (info["fps"] or 0))),
         noise_sigma=round(float(np.median(sig)), 2) if sig else 0.0,
         faces_max=max(face_counts, default=0), face_min_height=min(face_heights, default=0),
-        anime_score=round(float(np.median([anime_score(f) for f in frames])), 3) if frames else 0.0,
+        anime_score=_anime(frames),
         audio_streams=info["audio_streams"], sample_seconds=span,
     )
     p.flags = _flags(p)

@@ -9,6 +9,8 @@ original size vs the original (PSNR, mean ΔE): high PSNR + low ΔE = nothing mo
 
 from __future__ import annotations
 
+from .. import imgfile
+
 import html
 import json
 import re
@@ -120,7 +122,7 @@ def episode_frames(original: Path, result: Path, outdir: Path, times: list[int] 
                                  f"ORIGINAL {ow}x{oh} (player upscale)  t={t}s"),
                           np.full((dh, 8, 3), 255, np.uint8),
                           _label(cv2.resize(r, (dw, dh), interpolation=cv2.INTER_CUBIC), f"VidIMG {rw}x{rh}  t={t}s")])
-        cv2.imwrite(str(outdir / f"side_{i:02d}_{t:04d}s.jpg"), side, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        imgfile.imwrite(str(outdir / f"side_{i:02d}_{t:04d}s.jpg"), side, [cv2.IMWRITE_JPEG_QUALITY, 92])
         go = cv2.cvtColor(o, cv2.COLOR_BGR2GRAY)
         cw, ch = min(240, ow), min(180, oh)
         x, y = _busiest(go, cw, ch)
@@ -131,7 +133,7 @@ def episode_frames(original: Path, result: Path, outdir: Path, times: list[int] 
         zoom = np.hstack([_label(cv2.resize(co, (zw, zh), interpolation=cv2.INTER_NEAREST), "original pixels"), gap,
                           _label(cv2.resize(co, (zw, zh), interpolation=cv2.INTER_CUBIC), "original, bicubic"), gap,
                           _label(cv2.resize(cr, (zw, zh), interpolation=cv2.INTER_CUBIC), "VidIMG")])
-        cv2.imwrite(str(outdir / f"zoom_{i:02d}_{t:04d}s.png"), zoom)
+        imgfile.imwrite(str(outdir / f"zoom_{i:02d}_{t:04d}s.png"), zoom)
         ob = cv2.resize(o, (rw, rh), interpolation=cv2.INTER_CUBIC)
         back = cv2.resize(r, (ow, oh), interpolation=cv2.INTER_AREA)
         gob, gr, gback = (cv2.cvtColor(v, cv2.COLOR_BGR2GRAY) for v in (ob, r, back))

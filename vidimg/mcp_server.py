@@ -32,8 +32,7 @@ from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from vidimg import config, jobs  # noqa: E402
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".bmp", ".heic"}
-VIDEO_EXT = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".mpg", ".mpeg", ".wmv", ".ts", ".mts", ".m2ts", ".3gp", ".webm"}
+from vidimg.media import IMAGE_EXT, VIDEO_EXT  # noqa: E402  (one list for every entry point)
 
 mcp = FastMCP("vidimg", instructions=(
     "Faithful restoration of personal photos and videos with free tools only: open non-GAN models "

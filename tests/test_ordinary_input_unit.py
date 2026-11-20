@@ -25,7 +25,7 @@ def test_model_and_guard_read_a_rotated_photo_the_same_way(tmp_path):
     worker = cv2.imread(str(src), cv2.IMREAD_COLOR | cv2.IMREAD_ANYDEPTH)       # the flags sr_runner uses
     assert worker.shape == guard._read(src).shape == (80, 40, 3)
     flags = (Path(__file__).parent.parent / "vidimg" / "sr_runner.py").read_text(encoding="utf-8")
-    assert "cv2.imread(inp, cv2.IMREAD_COLOR | cv2.IMREAD_ANYDEPTH)" in flags   # the worker cannot be imported here
+    assert "_imread(inp, cv2.IMREAD_COLOR | cv2.IMREAD_ANYDEPTH)" in flags   # the worker cannot be imported here
     deep = tmp_path / "deep.png"
     cv2.imwrite(str(deep), np.full((4, 4, 3), 40000, np.uint16))
     assert cv2.imread(str(deep), cv2.IMREAD_COLOR | cv2.IMREAD_ANYDEPTH).dtype == np.uint16    # 16-bit kept

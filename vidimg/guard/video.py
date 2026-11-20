@@ -15,6 +15,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from .. import imgfile  # noqa: E402
 
 from .. import media, texture
 from . import Gate, GuardReport, SUGGEST, thresholds, verify_image
@@ -74,7 +75,7 @@ def _is_cut(a: np.ndarray, b: np.ndarray) -> bool:
 
 def _cut_near(frames: dict[int, Path], s: int) -> bool:
     """A cut between any of the frames s-1, s, s+1, s+2."""
-    imgs = [cv2.imread(str(frames[i])) if i in frames else None for i in (s - 1, s, s + 1, s + 2)]
+    imgs = [imgfile.imread(str(frames[i])) if i in frames else None for i in (s - 1, s, s + 1, s + 2)]
     return any(x is not None and y is not None and _is_cut(x, y) for x, y in zip(imgs, imgs[1:]))
 
 
@@ -333,8 +334,8 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
                         g.status == prev.status and g.value is not None and prev.value is not None and
                         (g.value < prev.value if g.name in ("identity", "backprojection") else g.value > prev.value)):
                     worst[g.name] = g
-            s0, s1 = cv2.imread(str(sf[i])), cv2.imread(str(sf[i + 1]))
-            d0, d1 = cv2.imread(str(df[i])), cv2.imread(str(df[i + 1]))
+            s0, s1 = imgfile.imread(str(sf[i])), imgfile.imread(str(sf[i + 1]))
+            d0, d1 = imgfile.imread(str(df[i])), imgfile.imread(str(df[i + 1]))
             if s0 is not None and d0 is not None and not interpolated:
                 fr, fo = texture.flat_shares(cv2.cvtColor(s0, cv2.COLOR_BGR2GRAY), cv2.cvtColor(d0, cv2.COLOR_BGR2GRAY))
                 flat_up.append(fo - fr)
