@@ -1,5 +1,7 @@
 # VidIMG Restore
 
+[![tests](https://github.com/Q8Xbox/VidIMG-skill/actions/workflows/tests.yml/badge.svg)](https://github.com/Q8Xbox/VidIMG-skill/actions/workflows/tests.yml)
+
 Faithful photo and video restoration for Claude Code, with **free tools only**: open restoration models
 on PyTorch CUDA, Video2X for anime, AviSynth+ / VapourSynth for field handling, and FFmpeg. No paid
 software is used or needed; the tool refuses to start any program from a paid software installation.
@@ -15,13 +17,18 @@ that fails it is never delivered.
 
 Restart Claude Code, then run `/vidimg:setup-vidimg D:/VidIMG`: it installs and verifies everything (about 5 GB of
 free, SHA-256-pinned downloads into `%LOCALAPPDATA%\VidIMG`). From a clone: `python vidimg_run.py setup --output D:/VidIMG`.
+Two things go outside the VidIMG folder, each only after you agree: FFmpeg (through winget) and the Python packages
+of `requirements.txt`, which go into the Python that runs VidIMG; when they are already there, that Python is not touched.
 Requirements: Windows 10/11 64-bit, Python 3.12+ on PATH, an NVIDIA GPU (AMD and Intel GPUs run the faithful video models through vs-mlrt / ONNX Runtime DirectML). Install and usage guide: [GUIDE.md](GUIDE.md).
 
 Design and evidence: [PLAN.md](PLAN.md) · every requirement and the install steps:
 [REQUIREMENTS.md](REQUIREMENTS.md).
 
-**Status:** phases 0–6 complete. Phase 6 acceptance: the owner reviewed 19 photos restored with the
-open models and the WhatsApp video restored with RealESRNet: "all faces look right" (2026-11-16).
+**Status:** version 0.2.0; phases 0–6 complete. Phase 6 acceptance: the owner reviewed 19 photos restored with the
+open models and the WhatsApp video restored with RealESRNet: "all faces look right" (2026-11-16). A full code
+review followed (2026-11-20): the guard no longer passes without evidence, long runs resume safely, and ordinary
+input (odd file names, rotated photos, non-Latin paths) no longer stops a run. What is still open is listed under
+[Known limits](#known-limits).
 
 ## How it decides
 
@@ -39,7 +46,8 @@ open models and the WhatsApp video restored with RealESRNet: "all faces look rig
   clipped highlights. Then the
   faithful RealESRNet / BSRNet when their estimated run fits in about 3 hours, otherwise Real-ESRGAN
   general-v3 (7.8 fps at 720p → 1080p). Long videos run in 2-minute chunks with context frames and
-  boundaries on scene cuts, audio muxed once, resumable.
+  boundaries on scene cuts, audio muxed once, resumable. Chunks are cut on exact frame numbers (checked frame by
+  frame against one whole run at 29.97 fps) and planned from the counted frames, not the container's duration.
 - **Texture kept:** every model also smooths away fine texture between the lines (painted backgrounds, grain,
   cloth). After the model, the source's own texture is put back between the lines (`--texture 0..1`, default 1;
   nothing invented, the lines stay as sharp as the model made them) and the result is encoded with x265's grain
@@ -50,9 +58,26 @@ open models and the WhatsApp video restored with RealESRNet: "all faces look rig
   model, scale, texture) with reasons, and shows all videos on a few contact sheets so Claude confirms "drawn or
   real" for every one by looking once. One resumable job then runs the whole plan and writes one combined report.
 - **Batches:** photos are processed in rounds; photos with identical settings share one model call
-  (the model loads once) and every photo is checkpointed in `<out>/items/`.
+  (the model loads once) and every photo is checkpointed in `<out>/items/`. A photo that cannot be read is
+  recorded and retried on resume; the others continue. Two photos with the same file name keep their own results.
 - **Guard:** face identity (SFace), face and overall structure, landmarks, eye colour, colour shift,
-  invented detail; for video also frames, duration, audio, flicker and VMAF.
+  invented detail; for video also frames, duration, audio, lip sync, on-screen shape, flicker and VMAF.
+  - It needs evidence: when too few frames could be compared, the result fails (`coverage`) instead of passing
+    on frame count and audio alone.
+  - It looks at the whole video: one frame pair per minute (6 to 40) and VMAF on windows spread over its length;
+    one bad stretch fails the result even when the average looks fine.
+  - It reports moved frame times (`timing`, a warning) and flicker that only shows in some samples.
+  - Interpolated results are compared on the source frames they kept.
+- **Long runs:** every checkpoint remembers what made it. A rerun with another model, scale, encoder or source
+  renders again instead of mixing old and new pieces; two files with the same name get separate work folders.
+  When an encoder dies or goes silent the run ends with an error instead of hanging and holding the GPU. After a
+  delivered result the large intermediates are deleted (`VIDIMG_KEEP_WORK=1` keeps them); a result the guard
+  rejects is moved to `work/<name>/rejected/`, out of the results folder.
+- **Files as they come:** any file name works, including Arabic and other non-Latin names and folders, apostrophes
+  and `#`. Phone photos are read in their EXIF orientation, and a photo's colour profile is carried into the
+  result. Photos: jpg, jpeg, png, tif, tiff, webp, bmp. Videos: mp4, mkv, mov, avi, m4v, mpg, mpeg, wmv, ts, mts,
+  m2ts, 3gp, webm, vob. The container follows the codec and the source: MP4 by default, Matroska when the source
+  has subtitles, attachments or PCM audio (or for FFV1), QuickTime for ProRes.
 
 ## In Claude Code
 
@@ -73,8 +98,10 @@ Or ask in plain words ("restore the photos in this folder"): the `restore-media`
 MCP tools (`vidimg/mcp_server.py`): `doctor`, `survey_media`, `decide_plan`, `run_plan` (the automatic flow),
 `analyze_media`, `restore_photos`, `restore_video`, `job_status`, `list_jobs`, `cancel_job`, `resume_job`,
 `verify_restoration`, `compare_frames`.
-Restorations run as detached background jobs (`vidimg/jobs.py`, files under `workspace/jobs/`), one GPU
-job at a time; `resume_job` continues a stopped job where it stopped.
+Restorations run as detached background jobs (`vidimg/jobs.py`, files under `<output root>/jobs/`), one GPU
+job at a time, first come first served; `resume_job` continues a stopped job where it stopped and `cancel_job`
+works at any moment, also before the job has started. Decisions sent with `decide_plan` while a plan is running
+are kept: items not started yet use them, and the item running at that moment is set back to pending.
 
 Safety hook (`.claude/settings.json` → `vidimg/hooks/pretool.py`), before every shell or file-write call:
 - **denied:** ffmpeg writing onto its own input; Video2X Real-ESRGAN / Real-CUGAN on content not declared anime;
@@ -87,26 +114,31 @@ python -m vidimg doctor                                            # environment
 python -m vidimg auto FILES_AND_FOLDERS [--out DIR]                # survey anything into one plan with decisions filled in
 python -m vidimg run-plan --out DIR                                # run that plan (resumable) + one combined report
 python -m vidimg restore PHOTOS_OR_FOLDERS [--out DIR] [--deblur]  # photo pipeline + review page (--deblur: opt-in, soft photos only)
-python -m vidimg restore-video IN.mp4 [--out DIR] [--preview-only] [--scale 2] [--content anime|real|auto] [--model NAME] [--engine auto|torch|mlrt]
+python -m vidimg restore-video IN.mp4 [--out DIR] [--preview-only] [--scale 2] [--content anime|real|auto]
+                               [--model NAME | --prefer NAME] [--engine auto|torch|mlrt] [--texture 0..1]
+                               [--mask-tape-noise] [--encoder hevc10|h264|prores|ffv1]
                                                                    # video pipeline + report.html
-python -m vidimg restore-series FOLDER [--episodes 1-26] [--out DIR] [--scale 2] [--content anime|real|auto] [--model NAME]
+python -m vidimg restore-series FOLDER [--episodes 1-26] [--out DIR] [--scale 2] [--content anime|real|auto]
+                               [--model NAME | --prefer NAME] [--texture 0..1] [--mask-tape-noise] [--report-only]
                                                                    # numbered episodes into ONE folder (resumable) + one series report
 python -m vidimg analyze FILE                                      # degradation profile and plan
-python -m vidimg verify ORIGINAL RESULT                            # fidelity guard on any pair
+python -m vidimg verify ORIGINAL RESULT [--interpolated]           # fidelity guard on any pair
 python -m vidimg upscale IN.jpg OUT/ --model bsrnet_x4 --scale 2   # one open model on one photo
 python -m vidimg denoise IN.jpg OUT/                               # SCUNet denoise
 python -m vidimg video2x IN.mp4 OUT/out.mkv --processor rife       # RIFE interpolation (on request)
 python -m vidimg calibrate MY_PHOTOS/ --apply                      # tune the guard on your photos (>= 20)
 python vidimg_run.py setup [--output DIR] [--yes] [--check]          # first run: install + verify everything
 python -m vidimg.free_install                                      # open-model runtime + models
-python -m vidimg.vs_install                                        # portable VapourSynth engine
+python -m vidimg.vs_install [--relock]                             # portable VapourSynth engine (--relock: accept its files after a deliberate update)
 python -m vidimg.avs_install                                       # optional AviSynth+ plugin set
 ```
 
-Add `--json` before the command for machine-readable output. Every external call is logged as a JSON
-evidence record in `<output root>/logs/`. Outputs, jobs and logs go to `VIDIMG_OUTPUT` when set (the owner uses
-`D:/VidIMG`, set in `.mcp.json` and `.claude/settings.json`), otherwise to `workspace/`; calibration state and
-research evidence always stay in `workspace/`.
+`--model` uses only that model; `--prefer` tries it first and falls back to the approved order. Add `--json`
+before the command for machine-readable output. Every external call is logged as a JSON evidence record in
+`<output root>/logs/`. Outputs, jobs and logs go to the output root: the `VIDIMG_OUTPUT` environment variable when
+set, otherwise the folder chosen at setup (stored in `vidimg.local.json`), otherwise `workspace/`. Calibration
+state and research evidence always stay in `workspace/`. Each results folder carries a small `.vidimg-output`
+marker, so a later survey of a parent folder does not take its work files for your media.
 
 ## Safety rules built into the code
 
@@ -115,12 +147,31 @@ research evidence always stay in `workspace/`.
 - Video2X Real-ESRGAN / Real-CUGAN / libplacebo require `content="anime"` (they distorted real faces).
 - Video field handling is classical; the models only see progressive frames.
 - No program from a paid software installation is ever started (`vidimg/proc.py`).
+- A result the guard could not check is not delivered: no compared frames means a failure, not a pass.
+- Downloads are checked, and the check is enforced: a model whose SHA-256 differs from the recorded one is set
+  aside and not used, and the VapourSynth engine refuses to run while one of its files differs from the first install.
+- `calibrate --apply` only writes thresholds inside a plausible range, so a bad fit cannot switch a gate off.
 
 ## Tests
 
 ```bash
-python -m pytest            # unit tests (no programs run)
+python -m pytest            # about 200 unit tests, half a minute
 ```
+
+No GPU, models, FFmpeg or media files are needed: the engines are replaced by stubs. The same suite runs on
+GitHub for every pull request and every push to `main` (Windows, Python 3.14). Ten image-guard tests need a
+private benchmark photo and skip without it.
+
+## Known limits
+
+- **Variable frame rate** (many phone clips): the result is written at a constant rate. The guard warns when
+  frames moved in time (`timing`), but the drift itself is not corrected.
+- **HD footage that needs a pre-pass** (interlaced or telecined HD): the model may read it with the SD colour
+  matrix. Not yet fixed; SD sources and progressive HD are not affected.
+- **Several newer guard limits are chosen values, not calibrated ones:** the sampling density, the flicker and
+  timing limits, and the calibration ranges. They behaved correctly on the owner's samples.
+- **`.heic` photos** are not supported; convert them first.
+- **Windows only.**
 
 ## License
 
