@@ -19,6 +19,26 @@ def ffmpeg() -> str:
     return exe
 
 
+def run_quiet(argv: list, **kw) -> subprocess.CompletedProcess:
+    """Run a tool whose output is not wanted WITHOUT handing it this process's own output streams.
+    Inside the MCP server those streams belong to the host application, and a child that inherits them can
+    fail to start at all ([WinError 50] on every video analysis, 2026-11-20). What the tool says on its error
+    stream is relayed through Python instead, so it still reaches the job log."""
+    r = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                       text=True, encoding="utf-8", errors="replace", **kw)
+    relay_errors(r.stderr)
+    return r
+
+
+def relay_errors(text: str | None) -> None:
+    import sys
+    if text and text.strip() and sys.stderr is not None:
+        try:
+            print(text.rstrip()[-4000:], file=sys.stderr, flush=True)
+        except (OSError, ValueError):
+            pass                                # a closed error stream must not fail the measurement
+
+
 def ffprobe() -> str:
     exe = shutil.which("ffprobe")
     if not exe:

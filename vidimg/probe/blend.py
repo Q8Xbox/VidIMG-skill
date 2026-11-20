@@ -22,6 +22,7 @@ Measured (8 s windows, analysis width 360): synthetic field-blend NTSC film -> P
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -137,9 +138,12 @@ def read_gray(src: Path, start: float, seconds: float, *, bob: str | None = None
     w, h = info["width"], info["height"]        # size only (the duration may be a container's)
     oh = max(2, round(h * width / w / 2) * 2)
     vf = (f"bwdif=mode=send_field:parity={bob}:deint=all," if bob else "") +         f"format=yuv420p16le,extractplanes=y,scale={width}:{oh}:flags=area"
+    # the error stream goes to a temporary file, never to this process's own (see media.run_quiet), and a file
+    # cannot fill up and block the tool the way an unread pipe would
+    errors = tempfile.TemporaryFile()
     p = subprocess.Popen([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{start:.3f}",
                           "-t", f"{seconds:g}", "-i", str(src), "-map", "0:v:0", "-vf", vf, "-pix_fmt", "gray16le",
-                          "-f", "rawvideo", "-"], stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
+                          "-f", "rawvideo", "-"], stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, stderr=errors)
     size = width * oh * 2
     try:
         while True:
@@ -152,6 +156,9 @@ def read_gray(src: Path, start: float, seconds: float, *, bob: str | None = None
     finally:
         p.stdout.close()
         p.wait()
+        errors.seek(0)
+        media.relay_errors(errors.read().decode("utf-8", "replace"))
+        errors.close()
 
 
 def windows_for(duration: float, count: int = 5, seconds: float = 6.0) -> list[tuple[float, float]]:

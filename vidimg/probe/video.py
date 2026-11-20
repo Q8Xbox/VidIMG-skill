@@ -116,8 +116,8 @@ def _sample_frames(src: Path, info: dict, n: int = 6) -> list[np.ndarray]:
         for i in range(n):
             t = info["duration"] * (i + 0.5) / n
             p = Path(tmp) / f"f{i}.png"
-            subprocess.run([_system_ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(src),
-                            "-frames:v", "1", "-y", str(p)], stdin=subprocess.DEVNULL, timeout=120)
+            media.run_quiet([_system_ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(src),
+                             "-frames:v", "1", "-y", str(p)], timeout=120)
             img = imgfile.imread(str(p))
             if img is not None:
                 frames.append(img)
