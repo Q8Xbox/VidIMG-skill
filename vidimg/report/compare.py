@@ -99,7 +99,7 @@ img{{width:100%;height:auto;border-radius:6px}} h2{{margin:0 0 4px;font-size:1.0
 
 VIDEO_GATE_NAMES = {**GATE_NAMES, "frames": "Frame count", "duration": "Duration", "audio": "Audio",
                     "timestamps": "Timestamps", "av_sync": "Lip sync (A/V offset)", "aspect": "Aspect ratio",
-                    "flicker": "Flicker", "coverage": "Frames compared", "vmaf": "VMAF (perceived quality)",
+                    "flicker": "Flicker", "coverage": "Frames compared", "timing": "Frame timing", "vmaf": "VMAF (perceived quality)",
                     "texture": "Texture kept (flat area vs plain upscale)"}
 STATUS_ICON = {"pass": "✅", "warn": "⚠️", "fail": "⛔", "n/a": "—"}
 

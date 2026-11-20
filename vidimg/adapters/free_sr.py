@@ -194,7 +194,8 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
     ow, oh = st.out_size(w, h)
     expected = expected_frames if expected_frames is not None else (
         round(min(duration, info["duration"] - (start or 0)) * fps) if duration else info["frames"])
-    seek = (["-ss", f"{start:g}"] if start is not None else []) + (["-t", f"{duration:g}"] if duration is not None else [])
+    # microseconds: "%g" keeps six digits in all, so past 1000 s a seek lost its fraction (1234.5678 -> 1234.57)
+    seek = (["-ss", f"{start:.6f}"] if start is not None else []) + (["-t", f"{duration:.6f}"] if duration is not None else [])
     colour = colour if colour is not None else (media.colour_hint(src) or
                                                 {k: info.get(k) for k in ("color_primaries", "color_transfer") if info.get(k)})
     full = colour.get("color_range") in ("pc", "jpeg") or str(info.get("pix_fmt", "")).startswith("yuvj")
