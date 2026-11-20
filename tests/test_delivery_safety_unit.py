@@ -119,6 +119,7 @@ def test_model_output_never_sits_next_to_the_prepass(tmp_path, monkeypatch):
 
     monkeypatch.setattr(pv, "run_engine", engine)
     monkeypatch.setattr(pv, "_room_for_lossless", lambda *a: True)
+    monkeypatch.setattr(pv, "output_suffix", lambda src: ".mp4")      # no probe of the (absent) source file
     prof = VideoProfile(str(base), 720, 576, 25.0, 250, 10.0, "mpeg2video", 4000, 0.4, 0.9, "tff", None, None)
     rec = pv.VideoRecord(str(base), {}, "", chosen="realesrnet")
     rec = pv._full_run(tmp_path / "clip.mpg", tmp_path / "out", work, base, prof, rec, lambda: [], "hevc10",

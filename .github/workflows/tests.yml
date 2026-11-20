@@ -1,0 +1,31 @@
+# Unit tests on every pull request and on main. No GPU, models, FFmpeg or media files are needed:
+# the engines are replaced by stubs, and tests that need the private benchmark photo skip themselves.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: windows-latest          # the tool targets Windows (paths, code pages, process handling)
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"     # the version requirements.txt was verified with
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install the main environment
+        run: python -m pip install -r requirements.txt
+      - name: Run the unit tests
+        run: python -m pytest -q -rs
