@@ -133,7 +133,50 @@ def _vmaf(src: Path, dst: Path, w: int, h: int, seconds: float, src_vf: str | No
     return float(found[-1]) if found else None
 
 
-def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float = 20.0,
+def _vmaf_spread(src: Path, dst: Path, w: int, h: int, windows: list[tuple[int, int]],
+                 src_vf: str | None = None) -> list[float] | None:
+    """VMAF of several frame windows [(first, last), ...] spread over the video, one mean per window, in one
+    decode of each file. Frames are paired by index as in _vmaf; the per-frame scores come from libvmaf's log."""
+    import json
+
+    sel = "+".join(f"between(n\\,{a}\\,{b})" for a, b in windows)
+    idx = "settb=1/30,setpts=N"
+    graph = (f"[1:v]select='{sel}',scale={w}:{h}:flags=bicubic,setsar=1,format=yuv420p,{idx}[d];"
+             f"[0:v]{src_vf + ',' if src_vf else ''}select='{sel}',setsar=1,format=yuv420p,{idx}[s];"
+             "[d][s]libvmaf=n_threads=8:log_fmt=json:log_path=vmaf.json")
+    with tempfile.TemporaryDirectory(prefix="vidimg_vmaf_") as tmp:      # relative log path: no drive-colon escaping
+        subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(Path(src).resolve()), "-i",
+                        str(Path(dst).resolve()), "-lavfi", graph, "-fps_mode", "passthrough", "-f", "null", "-"],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=4 * 3600, errors="replace",
+                       cwd=tmp)
+        log = Path(tmp) / "vmaf.json"
+        try:
+            scores = [f["metrics"]["vmaf"] for f in json.loads(log.read_text(encoding="utf-8"))["frames"]]
+        except (OSError, ValueError, KeyError):
+            return None
+    out, pos = [], 0
+    for a, b in windows:
+        part = scores[pos: pos + (b - a + 1)]
+        pos += b - a + 1
+        if len(part) < (b - a + 1) // 2:                 # a window that mostly did not decode is no evidence
+            return None
+        out.append(float(np.mean(part)))
+    return out
+
+
+SAMPLE_EVERY_S = 60.0           # one sampled frame pair per minute of video ...
+SAMPLES_MIN, SAMPLES_MAX = 6, 40    # ... but never fewer than the 6 the calibration used, nor more than 40
+VMAF_WINDOW_EVERY_S = 180.0     # long videos: one VMAF window per three minutes (3 to 8 windows of 10 s)
+FLICKER_PAIR_FACTOR = 2.0       # a sampled pair "boils" when it adds more than this many times the limit
+FLICKER_PAIR_SHARE = 0.25       # this share of boiling pairs fails the video whatever the median says
+
+
+def plan_samples(duration: float) -> int:
+    """Sampled frame pairs for a video of this length: 6 for clips (as calibrated), one per minute beyond that."""
+    return int(max(SAMPLES_MIN, min(SAMPLES_MAX, np.ceil(duration / SAMPLE_EVERY_S))))
+
+
+def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_seconds: float = 20.0,
                  interpolated: bool = False, reference_vmaf: float | None = None,
                  src_vf: str | None = None, src_rate: float = 1.0, drawn_faces: bool = False) -> GuardReport:
     """reference_vmaf: VMAF of the reference candidate's output on the same clip (from a previous
@@ -196,7 +239,10 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
 
     # per-frame image gates and temporal flicker on sampled frames
     n = min(src_frames, b["frames"]) if not interpolated else src_frames
-    starts = [int(n * (i + 0.5) / samples) for i in range(samples)]
+    # six pairs cover a preview clip; on a whole episode they left minutes between samples, so a damaged stretch
+    # was never decoded: the count grows with the length
+    samples = samples or plan_samples(a["duration"])
+    starts =[int(n * (i + 0.5) / samples) for i in range(samples)]
     starts = [s for s in starts if s + 1 < n]
     with tempfile.TemporaryDirectory(prefix="vidimg_vg_") as tmp:
         t = Path(tmp)
@@ -252,7 +298,7 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
                 se.append(rs / max(1e-3, ds_))
                 de.append(rd / max(1e-3, max(dd, ds_) if FLICKER_NORM == "max" else dd))
         for g in worst.values():
-            g.detail = f"worst of {samples} sampled frames ({fail_frames.get(g.name, 0)} failing): {g.detail}"
+            g.detail = f"worst of {len(sf) // 2} sampled frames ({fail_frames.get(g.name, 0)} failing): {g.detail}"
             # Video-specific relaxations, each backed by the person's footage and the calibration:
             # - identity: a single sampled frame where a face turns to profile or into shadow scores low
             #   (a dark profile face in a cinema: 0.77, visually faithful); model damage persists over
@@ -260,7 +306,9 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
             # - overall structure: it rejected no damaging output that other gates missed (40/42
             #   either way), while faithful denoising of dark compressed footage scored 0.96; it fails
             #   only for gross change
-            if g.status == "fail" and g.name == "identity" and fail_frames.get("identity", 0) < 2 \
+            #   (one in six sampled frames, the calibrated proportion, whatever the number of samples)
+            if g.status == "fail" and g.name == "identity" \
+                    and fail_frames.get("identity", 0) <= max(1, (len(sf) // 2) // 6) \
                     and g.value is not None and g.value >= vt["identity_single_frame_floor"]:
                 g.status = "warn"
             if g.status == "fail" and g.name == "backprojection" and g.value is not None \
@@ -284,14 +332,35 @@ def verify_video(src: Path, dst: Path, *, samples: int = 6, vmaf_seconds: float 
     if se and de:
         s_med, d_med = float(np.median(se)), float(np.median(de))
         added = d_med - s_med
-        gates.append(Gate("flicker", "pass" if added <= vt["flicker_added_max"] else "fail", round(added, 4),
-                          vt["flicker_added_max"],
-                          f"warp error added by the output (source {s_med:.4f}, output {d_med:.4f})"))
+        # the median hides a stretch: boiling in 2 of 6 samples left it untouched. Pairs far over the limit are
+        # counted as well; one such pair is a warning (a single hard motion can do it), a quarter of them fails
+        hot = sum(1 for x, y in zip(se, de) if y - x > FLICKER_PAIR_FACTOR * vt["flicker_added_max"])
+        status = "pass" if added <= vt["flicker_added_max"] else "fail"
+        if status == "pass" and hot:
+            status = "fail" if hot >= 2 and hot >= FLICKER_PAIR_SHARE * len(se) else "warn"
+        gates.append(Gate("flicker", status, round(added, 4), vt["flicker_added_max"],
+                          f"warp error added by the output (source {s_med:.4f}, output {d_med:.4f}); "
+                          f"{hot} of {len(se)} sampled pairs far over the limit"))
 
     if not interpolated:
-        v = _vmaf(src, dst, a["width"], a["height"], min(vmaf_seconds, a["duration"]), src_vf)
-        span = f"first {min(vmaf_seconds, a['duration']):.0f}s, output scaled to source"
-        if v is None:
+        worst_win = None
+        if a["duration"] > 2 * vmaf_seconds and n > 0:
+            # a long video: windows spread over its length instead of the first seconds only
+            k = int(max(3, min(8, np.ceil(a["duration"] / VMAF_WINDOW_EVERY_S))))
+            length = max(1, round(vmaf_seconds / 2 * n / a["duration"]))
+            firsts = [max(0, min(n - length, int(n * (i + 0.5) / k) - length // 2)) for i in range(k)]
+            wins = _vmaf_spread(src, dst, a["width"], a["height"], [(f, f + length - 1) for f in firsts], src_vf)
+            v = float(np.mean(wins)) if wins else None
+            worst_win = min(wins) if wins else None
+            span = f"{k} windows of {vmaf_seconds / 2:.0f}s spread over the video, output scaled to source" + \
+                (f"; lowest window {worst_win:.2f}" if wins else "")
+        else:
+            v = _vmaf(src, dst, a["width"], a["height"], min(vmaf_seconds, a["duration"]), src_vf)
+            span = f"first {min(vmaf_seconds, a['duration']):.0f}s, output scaled to source"
+        if v is not None and worst_win is not None and reference_vmaf is None and worst_win < vt["vmaf_floor"]:
+            gates.append(Gate("vmaf", "fail", round(v, 2), vt["vmaf_floor"],
+                              f"{span}: one stretch is below the gross-failure floor"))
+        elif v is None:
             gates.append(Gate("vmaf", "warn", None, None, f"{span}; could not be measured (is libvmaf in ffmpeg?)"))
         elif reference_vmaf is not None:
             need = reference_vmaf - vt["vmaf_drop_max"]
