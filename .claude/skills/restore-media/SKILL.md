@@ -86,6 +86,8 @@ DirectML on AMD or Intel GPUs) unless the person asks.
      middle of a movement (padding), not a drawing the animator held;
    - `partly_interlaced` finding → `filters: ["deinterlace_scenes"]` only when the comb close-ups show
      horizontal teeth on moving edges (not thin drawn stripes);
+   - `ghost_frames` finding → step `deghost` only when the ghost close-up shows two drawings at once in the
+     middle frame and each of them singly in a neighbour (a low-frame-rate copy made with blending);
    - the line close-ups: halos, block edges, stair-steps or colour off the lines that enlarging will make worse.
      Say what you see in the `reason`; choose the model and `texture` with it in mind.
    **Compose the clean-up for this source** as a restorer would write a script for it, with `filters`, from the

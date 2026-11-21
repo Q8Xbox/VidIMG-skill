@@ -234,6 +234,11 @@ def _flags(p: VideoProfile) -> list[str]:
             f.append(flag)
     if p.combing.get("is_partly_interlaced") and not ({"interlaced", "telecine", "blended"} & set(f)):
         f.append("partly_interlaced")
+    # a low-rate copy made with blending: single frames that are mixes of their neighbours (probe/ghosts.py);
+    # at 20 fps and more the "blended" flag and sRestore deal with mixes
+    if ((p.fps or 0) < 20 and "blended" not in f and (p.blend.get("judged") or 0) >= 40
+            and (p.blend.get("share") or 0) >= 0.03):
+        f.append("ghost_frames")
     if p.borders.get("has_borders"):
         f.append("black_borders")
     if p.repeats.get("is_padded") and "blended" not in f:

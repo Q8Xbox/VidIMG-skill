@@ -456,3 +456,79 @@ def test_the_frame_rate_copy_is_a_second_file_and_kept_only_if_the_originals_sur
     monkeypatch.setattr(pv.media, "probe", lambda p, exact=False: {"fps": 29.97, "frames": 100})
     rec = pv.add_interpolation(record(), {"interpolate": 3}, tmp_path / "work", "hevc10", True, log=lambda m: None)
     assert rec.interpolated is None and "above 60 fps" in rec.notes[-1]
+
+
+# ----------------------------------------------------------------------------- ghost frames of a low-rate copy
+def _picture(seed: int):
+    import cv2
+    import numpy as np
+    rng = np.random.default_rng(seed)
+    base = cv2.resize((rng.random((9, 12)) * 255).astype(np.uint8), (360, 270), interpolation=cv2.INTER_CUBIC)
+    return cv2.GaussianBlur(base, (0, 0), 2)
+
+
+def test_a_ghost_is_a_lone_mix_of_its_neighbours_and_takes_the_one_it_holds_more_of():
+    import numpy as np
+    from vidimg.probe import ghosts
+
+    def moved(img, dx):
+        return np.roll(img, dx, axis=1)
+
+    a = _picture(1)
+    seq = [moved(a, 6 * k) for k in range(12)]                    # a picture moving steadily: nothing is a mix
+    assert ghosts.find(iter(seq)).ghosts == []
+    mix = lambda x, y, w: np.clip(w * x.astype(np.float32) + (1 - w) * y.astype(np.float32), 0, 255).astype(np.uint8)  # noqa: E731
+    one = list(seq)
+    one[5] = mix(seq[4], seq[6], 0.7)                             # more of the earlier neighbour
+    one[9] = mix(seq[8], seq[10], 0.3)                            # more of the later one
+    got = ghosts.find(iter(one))
+    assert [(i, j) for i, j, _ in got.ghosts] == [(5, 4), (9, 10)] and got.frames == 12 and got.in_runs == 0
+    assert abs(got.ghosts[0][2] - 0.7) < 0.1 and abs(got.ghosts[1][2] - 0.3) < 0.1
+    # a dissolve: every frame is a mix of its neighbours, in a run, and all of it stays
+    b = _picture(2)
+    fade = [a] * 2 + [mix(b, a, k / 8) for k in range(1, 8)] + [b] * 2
+    assert ghosts.find(iter(fade)).ghosts == []
+    # and two mixes side by side are a run, whatever made them: neither is replaced
+    run = list(seq)
+    run[5], run[6] = mix(seq[4], seq[7], 0.66), mix(seq[4], seq[7], 0.33)
+    got = ghosts.find(iter(run))
+    assert got.ghosts == [] and got.in_runs == 2
+    assert ghosts.find(iter([])).frames == 0 and ghosts.find(iter([a])).ghosts == []
+
+
+def test_ghost_replacement_only_chooses_frames_and_is_a_step_of_its_own(monkeypatch, tmp_path):
+    from fractions import Fraction
+    st = avs.ReplaceFrames(pairs=[[5, 4], [9, 10]])
+    assert st.lines() == ["FreezeFrame(5, 5, 4)", "FreezeFrame(9, 9, 10)"] and st.rate() == 1
+    assert avs.lint(avs.Script(Path("C:/in/a.mkv"), [st], Path("C:/work/a.lwi"), Fraction(10)).text()) == []
+    blocks = library.load(Path("no/such"))[0]
+    assert blocks["deghost"].runner == "deghost" and "ghost_frames" in blocks["deghost"].addresses
+    assert {r["defect"]: r["blocks"] for r in library.coverage(blocks)}["ghost_frames"] == ["deghost"]
+    assert recipe.validate({"faces": "drawn", "steps": ["fields", "deghost"], "interpolate": 3}, blocks)[0]["steps"][1] == {"block": "deghost"}
+    ran = {}
+    monkeypatch.setattr(pv, "run_deghost", lambda base, work, log=print: (Path("fixed.nut"), {"count": 366, "frames": 12120, "in_runs": 10}))
+    rec = SimpleNamespace(prepass={}, notes=[])
+    ctx = {"base": Path("src"), "shape_ref": Path("src"), "work": tmp_path, "prof": None, "rec": rec, "log": lambda m: None, "drawn": True}
+    assert pv.run_steps(ctx, [{"block": "deghost"}], blocks) and ctx["base"] == Path("fixed.nut")
+    assert "366 of 12120 frames" in rec.notes[0] and "every frame of the result is a frame of the source" in rec.notes[0]
+    monkeypatch.setattr(pv, "run_deghost", lambda base, work, log=print: (None, {"skipped": "no ghost frame was found"}))
+    rec2 = SimpleNamespace(prepass={}, notes=[])
+    c2 = dict(ctx, rec=rec2, base=Path("src"))
+    assert pv.run_steps(c2, [{"block": "deghost"}], blocks) and c2["base"] == Path("src") and "not replaced" in rec2.notes[0]
+
+
+def test_the_survey_reports_ghosts_only_for_a_low_rate_copy():
+    from vidimg.probe import video as pv_probe
+
+    def flags(fps, share, judged=400, blended=False):
+        p = SimpleNamespace(fps=fps, blend={"share": share, "judged": judged, "is_blended": blended}, interlaced_ratio=0.0,
+                            repeated_field_ratio=0.0, chroma={}, tape={}, combing={}, borders={}, repeats={}, height=384,
+                            bits_per_pixel=0.2, blockiness=1.2, noise_sigma=0.5, duplicate_ratio=0.0, faces_max=0, anime_score=0.5)
+        return pv_probe._flags(p)
+
+    assert "ghost_frames" in flags(9.99, 0.07)
+    assert "ghost_frames" not in flags(9.99, 0.01) and "ghost_frames" not in flags(9.99, 0.07, judged=10)
+    assert "ghost_frames" not in flags(25.0, 0.07) and "ghost_frames" not in flags(25.0, 0.3, blended=True)
+    prof = SimpleNamespace(flags=["ghost_frames"], fps=9.99, borders={}, repeats={}, combing={}, blockiness=1.2, blend={"share": 0.07})
+    got = auto._findings(prof)
+    assert got[0]["decision"] == "step: deghost" and "7%" in got[0]["what"]

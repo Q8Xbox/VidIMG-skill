@@ -693,6 +693,60 @@ def verify_cleanup(src: Path, dst: Path, *, deblocked: bool = False, drawn_faces
         ["deblocking removed no block edges: keep the input"] if "blocks" in failed else []), False)
 
 
+# ----------------------------------------------------------------------------- ghost frames replaced
+GHOSTS_LEFT = 0.25              # share of the ghosts that may still be found afterwards
+GHOST_SAME_PSNR = 50.0          # dB: a frame of the result is a frame of the input (decoders round differently,
+                                # see SPANS_SAME_PSNR; another picture scores far below)
+
+
+def verify_deghost(src: Path, dst: Path, *, pairs: list, frames: int = 16) -> GuardReport:
+    """Ghost replacement against its input: same frames, duration, audio, shape; every sampled replaced frame is
+    the neighbour it was to become, every sampled other frame is itself; and the ghosts are gone."""
+    from fractions import Fraction
+
+    from ..probe import ghosts
+
+    src, dst = Path(src), Path(dst)
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    gates = _rate_gates(a, b, Fraction(1), Fraction(1))
+    shown = {int(i): int(j) for i, j in pairs}
+    total = min(a["frames"], b["frames"])
+    step = max(1, len(pairs) // frames)
+    changed = [int(i) for i, _ in pairs[::step]][:frames]
+    kept = [i for i in (int(total * (k + 0.5) / (frames * 2)) for k in range(frames * 2)) if i not in shown][:frames]
+
+    def luma(path: Path, idx: list[int], folder: Path, tag: str) -> dict:
+        return {i: _luma8(f) for i, f in _frames_by_index(path, idx, folder, tag, pre_vf="extractplanes=y").items()}
+
+    def psnr(x, y) -> float | None:
+        if x is None or y is None or x.shape != y.shape:
+            return None
+        return float(10 * np.log10(255 ** 2 / max(float(np.mean((x - y) ** 2)), 1e-6)))
+
+    with tempfile.TemporaryDirectory(prefix="vidimg_ghost_") as tmp:
+        t = Path(tmp)
+        out = luma(dst, sorted(set(changed + kept)), t, "d")
+        ref = luma(src, sorted({shown[i] for i in changed} | set(kept)), t, "s")
+        rep = [p for p in (psnr(ref.get(shown[i]), out.get(i)) for i in changed) if p is not None]
+        same = [p for p in (psnr(ref.get(i), out.get(i)) for i in kept) if p is not None]
+    gates.append(Gate("replaced", "pass" if rep and min(rep) >= GHOST_SAME_PSNR else "fail",
+                      round(min(rep), 1) if rep else None, GHOST_SAME_PSNR,
+                      f"{len(rep)} sampled replaced frames against the neighbour each was to become (lowest)"))
+    gates.append(Gate("untouched", "pass" if same and min(same) >= GHOST_SAME_PSNR else "fail",
+                      round(min(same), 1) if same else None, GHOST_SAME_PSNR,
+                      f"{len(same)} sampled other frames against themselves (lowest)"))
+    left = ghosts.scan(dst)
+    limit = max(2, round(GHOSTS_LEFT * len(pairs)))
+    ok = left.error is None and len(left.ghosts) <= limit
+    gates.append(Gate("ghosts", "pass" if ok else "fail", len(left.ghosts), limit,
+                      left.error or f"ghost frames: {len(pairs)} before, {len(left.ghosts)} after"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"replaced": "a replaced frame is not the neighbour it was to become: keep the input",
+            "untouched": "frames that were not ghosts changed: keep the input",
+            "ghosts": "the ghost frames are still there: keep the input"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
 # ----------------------------------------------------------------------------- stabilised: moved, not altered
 MOVED_PSNR = 40.0               # dB after lining the frames up. Measured on an owner cut with artificial jitter:
                                 # a stabilised frame against its input 43.3 at worst (median 52.3); the same frames

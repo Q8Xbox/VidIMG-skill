@@ -94,5 +94,9 @@
  "low_frame_rate": {
   "looks_like": "jerky motion: far fewer pictures per second than the original had (a 10 fps copy)",
   "measured_by": null
+ },
+ "ghost_frames": {
+  "looks_like": "single frames showing two drawings at once (a low-frame-rate copy made with blending)",
+  "measured_by": "ghost_frames"
  }
 }

@@ -1,0 +1,16 @@
+{
+ "name": "deghost",
+ "kind": "field",
+ "engine": "builtin",
+ "runner": "deghost",
+ "addresses": [
+  "ghost_frames"
+ ],
+ "what": "replaces each ghost frame (a single frame that is a mix of the picture before and the picture after) by the neighbour it holds more of. Only chooses frames: every frame of the result is a frame of the source, the count and the rate stay. Mixes in runs are dissolves and are left",
+ "when": "a low-frame-rate copy made with blending shows double images on single frames (the analysis reports ghost_frames; the frame strip shows two drawings at once in one frame and singly in its neighbours). For blended sources at 20 fps and more, fields (sRestore) is the tool",
+ "softens": "the drawing next to a ghost is held one frame longer, so motion there steps instead of smearing",
+ "tried_on": [
+  "owner cartoon at 10 fps: 366 of 12120 frames were ghosts, many at a regular five-frame spacing; 10 more in runs were left"
+ ],
+ "version": 1
+}
