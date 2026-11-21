@@ -172,7 +172,8 @@ Claude follows the approved workflow in the `restore-media` skill and reports ba
 and numbered series, measures them, and prepares a plan with a decision for each (cartoon or real footage, which
 model, what size). It then looks at a contact sheet of all the videos and at close-ups of each one, corrects the
 plan where the measurements were wrong, and decides by eye whether measured defects are real (black bars to cut
-away, copied frames to drop). When the choice between two treatments is about how the result looks, it tries them
+away, copied frames to drop, interlaced stretches to deinterlace) and which clean-up this particular video
+needs before the model sees it (removing block edges, pulling back halos beside lines). When the choice between two treatments is about how the result looks, it tries them
 on short previews, compares them side by side and picks one. It tells you in a few lines what it decided and why,
 and starts one job that works through everything. Afterwards it looks at the before/after frames of each result
 and writes down what it sees. Claude chooses how a result should look; only the fidelity guard decides whether a

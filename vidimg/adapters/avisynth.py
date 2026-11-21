@@ -276,13 +276,57 @@ class DropRepeats:
         return [f"TDecimate(mode=2, rate={float(Fraction(self.frate)):.6f})"]
 
 
+@dataclass
+class Dehalo:
+    """Light halos beside dark lines (edge enhancement baked into old masters): DeHalo_alpha pulls the overshoot
+    back towards its surroundings. It never sharpens; `dark` stays low so the lines themselves keep their weight."""
+
+    radius: float = 2.0                    # halo width in pixels (SD masters: about 2)
+    bright: float = 0.8                    # how much of a bright halo is removed (0..1)
+    dark: float = 0.2                      # how much of a dark halo is removed (0..1)
+
+    def rate(self) -> Fraction:
+        return Fraction(1)
+
+    def lines(self) -> list[str]:
+        return [f"DeHalo_alpha(rx={self.radius:g}, ry={self.radius:g}, darkstr={self.dark:g}, "
+                f"brightstr={self.bright:g})"]
+
+
+@dataclass
+class DeinterlaceSpans:
+    """A progressive video with interlaced stretches (probe/combing.py): only the measured spans are
+    deinterlaced, at the same rate (QTGMC, FPSDivisor=2); every frame outside them is passed through untouched,
+    which the pass's guard checks. Runs alone, on the source's own frame numbering."""
+
+    spans: list = field(default_factory=list)      # [[first, last], ...] inclusive, ascending, not touching
+    frames: int = 0                                # frames in the clip
+    tff: bool = True
+
+    def rate(self) -> Fraction:
+        return Fraction(1)
+
+    def lines(self) -> list[str]:
+        parts, at = [], 0
+        for a, b in self.spans:
+            if a > at:
+                parts.append(f"__src.Trim({at}, end={a - 1})")
+            parts.append(f"__fix.Trim({a}, end={b})")
+            at = b + 1
+        if at < self.frames:
+            parts.append(f"__src.Trim({at}, end={self.frames - 1})")
+        return ["AssumeTFF()" if self.tff else "AssumeBFF()", "__src = last",
+                '__fix = QTGMC(Preset="Slower", SourceMatch=3, Lossless=2, Sharpness=0.2, FPSDivisor=2)',
+                " ++ ".join(parts)]
+
+
 AvsStage = (Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | MaskBottom | SRestore
-            | DropRepeats)
+            | DropRepeats | Dehalo | DeinterlaceSpans)
 # processing order from the Doom9 consensus (04_doom9_practice.md 1.1). Deblock runs on the original
 # grid; for interlaced input, field handling comes first (Deblock_QED needs progressive frames).
 # Un-blending comes right after field handling: every later stage would smear the ghosts further.
 # Chroma shift is corrected on progressive frames, right after field handling.
-_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, DropRepeats: 2.3, ChromaDenoise: 3,
+_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, DropRepeats: 2.3, DeinterlaceSpans: 2.05, Dehalo: 4.5, ChromaDenoise: 3,
           Degrain: 4,
           Repair: 5}
 
@@ -403,7 +447,7 @@ def render(src: Path, dst: Path, stages: list[AvsStage], *, work: Path | None = 
     args = [system_ffmpeg(), "-hide_banner", "-nostdin", "-y", *seek, "-f", "avisynth", "-i", str(avs),
             *seek, "-i", str(src), "-map", "0:v:0", "-map", "1:a?", "-c:a", "copy", "-map_metadata", "1",
             *INTERMEDIATE, "-metadata", "comment=VidIMG AviSynth+ pre-pass: " +
-            " | ".join(ln for s in order(stages) for ln in s.lines() if not ln.startswith("__")), str(dst)]
+            " | ".join(ln for s in order(stages) for ln in s.lines() if not ln.startswith("__"))[:900], str(dst)]
     expected = round(packets * float(out_fps / fps)) if packets else 0
     if duration is not None:
         expected = round(duration * float(out_fps))

@@ -181,7 +181,7 @@ def _keep_awake() -> None:
 def restore_series(src_dir: Path, out: Path | None = None, wanted: set[int] | None = None, *,
                    scale: float | None = 2, content: str = "auto", model: str | None = None,
                    encoder: str = "hevc10", log: Callable[[str], None] = print,
-                   mask_tape_noise: bool = False, model_strict: bool = True) -> dict:
+                   mask_tape_noise: bool = False, model_strict: bool = True, filters=None) -> dict:
     """Restore every wanted episode into one folder and write the series report. Returns the status dict."""
     from . import pipeline_video
     from .report import compare, series_report
@@ -200,7 +200,8 @@ def restore_series(src_dir: Path, out: Path | None = None, wanted: set[int] | No
     status.setdefault("_options", {})
     status["_options"].update({"source": str(src_dir), "scale": scale, "content": content, "model": model,
                                "model_strict": model_strict,
-                               "mask_tape_noise": mask_tape_noise, "episodes": [n for n, _ in episodes]})
+                               "mask_tape_noise": mask_tape_noise, "episodes": [n for n, _ in episodes]}
+                              | ({"filters": filters} if filters else {}))
 
     def save() -> None:
         status_file.write_text(json.dumps(status, indent=1, default=str), encoding="utf-8")
@@ -227,7 +228,7 @@ def restore_series(src_dir: Path, out: Path | None = None, wanted: set[int] | No
                 log(f"ep {key}: restoring {src.name}")
                 rec = pipeline_video.restore_video(src, out, scale=scale, content=content, model=model,
                                                    model_strict=model_strict,
-                                                   mask_tape_noise=mask_tape_noise,
+                                                   mask_tape_noise=mask_tape_noise, filters=filters,
                                                    encoder=encoder, log=lambda m: log(f"ep {key}: {m.strip()}"))
                 d = rec.to_dict()
                 (out / "records" / f"{src.stem}.json").write_text(

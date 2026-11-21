@@ -34,7 +34,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
-from . import config, statefile
+from . import cleanup, config, statefile
 from .adapters import OUTPUT_MARKER, mark_output
 
 from .media import IMAGE_EXT, VIDEO_EXT  # noqa: E402  (one list for every entry point)
@@ -42,9 +42,11 @@ SERIES_MIN = 3                 # numbered episodes in one folder that make it a 
 SHEETS_PER_PAGE = 6            # video frame sheets per contact sheet
 PLAN_VERSION = 1
 VIDEO_KEYS = {"content", "model", "model_strict", "scale", "texture", "mask_tape_noise", "preview_only", "skip",
-              "remove_repeats", "crop_borders"}
+              "remove_repeats", "crop_borders", "filters"}
 FRAMING_KEYS = {"remove_repeats", "crop_borders"}      # single videos only (a series is decided as one)
-TRIAL_KEYS = {"content", "model", "scale", "texture", "remove_repeats", "crop_borders"}
+TRIAL_KEYS = {"content", "model", "scale", "texture", "remove_repeats", "crop_borders", "filters"}
+BLOCKS_WORTH_A_LOOK = 1.8      # blockdetect mean from which block edges showed on the owner samples (1.9-3.0;
+                               # the clean ones read 1.1-1.3)
 TRIAL_RECIPES = (2, 4)         # recipes compared in one trial
 REVIEW_VERDICTS = ("good", "acceptable", "redo")
 PHOTO_KEYS = {"deblur", "skip"}
@@ -133,7 +135,7 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
     try:
         from .report import closeups
         close = closeups.sheet(src, out / "survey" / f"{item_id}_closeups.jpg", borders=prof.borders,
-                               repeats=prof.repeats, title=f"{item_id}  {src.name}")
+                               repeats=prof.repeats, combing=prof.combing, title=f"{item_id}  {src.name}")
     except Exception as e:  # noqa: BLE001  (an aid for the decision; the survey goes on without it)
         close = None
         log(f"   {item_id}: close-ups failed ({e})")
@@ -147,7 +149,7 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
           # the probe's reading stands until someone looks at the sheet (it often reads old cartoons as real footage)
           "decision": {"content": "anime" if anime else "auto", "model": guide["suggested"], "model_strict": False,
                        "scale": None, "texture": None, "mask_tape_noise": False, "preview_only": False, "skip": False,
-                       "remove_repeats": False, "crop_borders": False},
+                       "remove_repeats": False, "crop_borders": False, "filters": []},
           "decided_by": "analysis", "reasons": list(guide["why"]),
           "needs_look": "confirm on the contact sheet: drawn (anime) or real footage"
                         + ("; judge each finding on the close-ups" if findings else ""), "state": "pending"}
@@ -162,6 +164,19 @@ def _findings(prof) -> list[dict]:
     edge, nor padding from a held drawing."""
     out = []
     b, r = prof.borders or {}, prof.repeats or {}
+    c = getattr(prof, "combing", None) or {}
+    if "partly_interlaced" in prof.flags:
+        out.append({"finding": "partly_interlaced",
+                    "what": f"{len(c.get('spans') or [])} interlaced stretches ({c.get('span_frames')} of "
+                            f"{c.get('frames')} frames) in a progressive video; enlarging keeps the comb teeth",
+                    "decision": "filters: deinterlace_scenes",
+                    "look": "the comb close-ups: horizontal teeth on moving edges, or thin drawn stripes?"})
+    if (getattr(prof, "blockiness", None) or 0) >= BLOCKS_WORTH_A_LOOK:
+        out.append({"finding": "block_edges",
+                    "what": f"compression block edges (level {prof.blockiness:.1f}; clean sources read about 1.2); "
+                            "a model sharpens them into a grid",
+                    "decision": "filters: deblock (light, medium or strong)",
+                    "look": "the line close-ups: a grid of square blocks in flat colours or along lines?"})
     if "black_borders" in prof.flags:
         out.append({"finding": "black_borders",
                     "what": f"black bars: left {b.get('left')}, right {b.get('right')}, top {b.get('top')}, bottom "
@@ -326,6 +341,8 @@ def summary(plan: dict) -> dict:
                        prepass=it.get("prepass"), tape_advice=it.get("tape_advice"), guide=it.get("guide"),
                        est_hours=it.get("est_hours"), needs_look=it.get("needs_look"),
                        findings=it.get("findings"), closeups=it.get("closeups"))
+            if it.get("state") == "pending":
+                row.update(filter_catalogue=cleanup.guide())
             if it["type"] == "series":
                 row.update(episodes=it.get("episodes"))
         for k in ("result", "error", "report", "delivered", "trials", "review"):
@@ -343,8 +360,10 @@ def summary(plan: dict) -> dict:
 def _next_step(plan: dict, states: list) -> str | None:
     if any(s == "pending" for s in states):
         return ("LOOK at each contact sheet AND each video's closeups image. Decide with decide_plan: content/model "
-                "for any item the analysis got wrong (drawn vs real is the common one), and each finding you can "
-                "confirm by eye (crop_borders, remove_repeats). When two or more recipes are plausible and you cannot "
+                "for any item the analysis got wrong (drawn vs real is the common one), each finding you can "
+                "confirm by eye (crop_borders, remove_repeats), and the clean-up `filters` the close-ups call for "
+                "(filter_catalogue says what each does and when; dehalo has no measurement, only your eyes). When "
+                "two or more recipes are plausible (a filter or not, which strength, which model) and you cannot "
                 "tell which will look better, compare them first with try_recipes and look at its sheet. Then "
                 "run_plan. Tell the person in a few lines what you decided and why.")
     unseen = [it["id"] for it in plan["items"] if it["type"] == "video" and it.get("delivered") and not it.get("review")]
@@ -386,13 +405,18 @@ def _decide(out: Path, decisions: dict[str, dict], by: str) -> dict:
             raise ValueError(f"{item_id}: texture must be between 0 and 1")
         if d.get("scale") is not None and not 1 <= float(d["scale"]) <= 4:
             raise ValueError(f"{item_id}: scale must be between 1 and 4")
+        if "filters" in d:
+            try:
+                d["filters"] = cleanup.parse(d["filters"])
+            except ValueError as e:
+                raise ValueError(f"{item_id}: {e}") from None
         if "content" in d and "model" not in d and it["type"] != "photos":
             pick = (it.get("guide") or {}).get(f"suggested_if_{d['content']}")
             if pick:
                 d["model"] = pick
                 it.setdefault("reasons", []).append(f"content set to {d['content']}: model {pick} from the guide")
         it["decision"].update(d)
-        if any(k in d for k in ("content", "model", "scale", "texture") + tuple(FRAMING_KEYS)) and it.get("review"):
+        if any(k in d for k in ("content", "model", "scale", "texture", "filters") + tuple(FRAMING_KEYS)) and it.get("review"):
             it.pop("review")                            # a new recipe: the old look no longer stands
             if it.get("state") == "delivered":
                 it["state"] = "pending"
@@ -473,7 +497,7 @@ def _run_video(it: dict, out: Path, log) -> None:
                                        model_strict=bool(d.get("model_strict")),
                                        mask_tape_noise=bool(d.get("mask_tape_noise")),
                                        remove_repeats=bool(d.get("remove_repeats")),
-                                       crop_borders=bool(d.get("crop_borders")), log=log)
+                                       crop_borders=bool(d.get("crop_borders")), filters=d.get("filters"), log=log)
     r = rec.to_dict()
     dst.mkdir(parents=True, exist_ok=True)
     (dst / "record.json").write_text(json.dumps(r, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
@@ -495,7 +519,7 @@ def _run_series(it: dict, out: Path, log) -> None:
     status = series.restore_series(folder, dst, set(it["episodes"]), scale=d.get("scale") or 2,
                                    content=d.get("content") or "auto", model=d.get("model"),
                                    model_strict=bool(d.get("model_strict")),
-                                   mask_tape_noise=bool(d.get("mask_tape_noise")), log=log)
+                                   mask_tape_noise=bool(d.get("mask_tape_noise")), filters=d.get("filters"), log=log)
     eps = {k: v for k, v in status.items() if not k.startswith("_")}
     done = sorted(k for k, v in eps.items() if v.get("delivered"))
     reports = sorted(dst.glob("Series Comparison Report*.html"))
@@ -582,6 +606,11 @@ def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], Non
             raise ValueError(f"recipe {n}: model must be one of {config.VIDEO_MODEL_CHOICES}")
         if r.get("texture") is not None and not 0 <= float(r["texture"]) <= 1:
             raise ValueError(f"recipe {n}: texture must be between 0 and 1")
+        if "filters" in r:
+            try:
+                r["filters"] = cleanup.parse(r["filters"])
+            except ValueError as e:
+                raise ValueError(f"recipe {n}: {e}") from None
         typed.append((name, r))
     src = Path(it.get("analysed_episode") or it["source"])
     tdir = out / "trials" / item_id
@@ -597,7 +626,7 @@ def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], Non
                                            model_strict=bool(d.get("model")),
                                            mask_tape_noise=bool(d.get("mask_tape_noise")),
                                            remove_repeats=bool(d.get("remove_repeats")),
-                                           crop_borders=bool(d.get("crop_borders")), log=log)
+                                           crop_borders=bool(d.get("crop_borders")), filters=d.get("filters"), log=log)
         att = rec.attempts[-1] if rec.attempts else None
         work = run_dir / "work" / pipeline_video.work_key(run_dir, src)
         strength = config.TEXTURE_STRENGTH if d.get("texture") is None else float(d["texture"])
@@ -708,7 +737,8 @@ def write_report(plan: dict) -> Path:
                 f"texture {d['texture']:g}" if d.get("texture") is not None else None,
                 "tape noise masked" if d.get("mask_tape_noise") else None,
                 "copied frames removed" if d.get("remove_repeats") else None,
-                "black borders cut" if d.get("crop_borders") else None) if x)
+                "black borders cut" if d.get("crop_borders") else None,
+                f"clean-up: {cleanup.describe(d['filters'])}" if d.get("filters") else None) if x)
             r = it.get("result") or {}
             if it["type"] == "series":
                 res = f"{r.get('delivered', 0)} of {r.get('total', 0)} episodes delivered"

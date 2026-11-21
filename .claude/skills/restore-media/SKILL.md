@@ -59,8 +59,17 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    - `black_borders` finding → `crop_borders: true` only when everything outside the red outline is black;
    - `padded_repeats` finding → `remove_repeats: true` only when the frames marked COPY repeat a drawing in the
      middle of a movement (padding), not a drawing the animator held;
+   - `partly_interlaced` finding → `filters: ["deinterlace_scenes"]` only when the comb close-ups show
+     horizontal teeth on moving edges (not thin drawn stripes);
    - the line close-ups: halos, block edges, stair-steps or colour off the lines that enlarging will make worse.
      Say what you see in the `reason`; choose the model and `texture` with it in mind.
+   **Compose the clean-up for this source** as a restorer would write a script for it, with `filters`, from the
+   catalogue each pending item carries (`filter_catalogue`): `deinterlace_scenes`, `deblock` and `dehalo`, the
+   last two at `light`, `medium` or `strong`. Use a filter only when you can see its defect, and the mildest
+   strength that removes it: every filter also softens something (deblock: fine texture; dehalo: the area beside
+   lines). Dehalo has no measurement at all; only your look at the line close-ups can call for it. The tool fixes
+   the order, checks the script and judges each pass with its guard, so a wrong choice costs time, not fidelity;
+   when unsure whether a filter helps, or which strength, put the variants through `try_recipes`.
    When two or more recipes are plausible and the choice is about how the result looks (which model keeps the
    lines and the painted backgrounds, how much texture to return), run `try_recipes` and look at its sheet before
    deciding; choose only among recipes the guard passed. The analysis

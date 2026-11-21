@@ -94,6 +94,9 @@ def main(argv: list[str] | None = None) -> int:
                           "torch, or mlrt (ONNX Runtime DirectML, any DirectX 12 GPU)")
     rvv.add_argument("--mask-tape-noise", action="store_true",
                      help="opt-in: black out VHS head-switching noise found in the bottom lines")
+    rvv.add_argument("--filters", default=None,
+                     help="clean-up before the model, from the catalogue (vidimg/cleanup.py), e.g. "
+                          "deinterlace_scenes,deblock:light,dehalo:medium")
     rvv.add_argument("--remove-repeats", action="store_true",
                      help="drop the copied frames of a padded original (analyze shows the cycle), back to its own rate")
     rvv.add_argument("--crop-borders", action="store_true",
@@ -216,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
                                            on_progress=progress, scale=a.scale, content=a.content,
                                            model=a.model or a.prefer, model_strict=a.prefer is None,
                                            mask_tape_noise=a.mask_tape_noise, remove_repeats=a.remove_repeats,
-                                           crop_borders=a.crop_borders)
+                                           crop_borders=a.crop_borders, filters=a.filters)
         print()
         out.mkdir(parents=True, exist_ok=True)
         (out / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, ensure_ascii=False, default=str),
