@@ -1,0 +1,42 @@
+{
+ "name": "deband",
+ "kind": "filter",
+ "engine": "ffmpeg",
+ "addresses": [
+  "banding"
+ ],
+ "what": "smooths the visible steps in gradients (ffmpeg gradfun) and leaves edges alone",
+ "when": "skies, fades or soft shadows show stepped bands instead of a smooth gradient",
+ "script": [
+  "gradfun={strength}:{radius}"
+ ],
+ "params": {
+  "strength": {
+   "type": "float",
+   "min": 0.51,
+   "max": 8.0,
+   "default": 1.2
+  },
+  "radius": {
+   "type": "int",
+   "min": 8,
+   "max": 32,
+   "default": 16
+  }
+ },
+ "presets": {
+  "light": {
+   "strength": 1.2
+  },
+  "strong": {
+   "strength": 3.0
+  }
+ },
+ "default_preset": "light",
+ "softens": "very low-contrast texture inside gradients",
+ "status": "candidate",
+ "tried_on": [
+  "written from restoration practice; runs and passes the guard on a 15 s cut of an owner cartoon that does not show this defect (safe to try). Whether it helps on a source that has the defect is not shown yet"
+ ],
+ "version": 1
+}

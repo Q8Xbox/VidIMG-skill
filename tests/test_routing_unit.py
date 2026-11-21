@@ -44,7 +44,22 @@ def test_anime_video_plan():
     assert all(isinstance(s, video2x.AnimeSR) and s.scale == 2 for s in stages[:2])
     assert [s.processor for s in stages[:2]] == ["realesrgan", "realcugan"]
     assert stages[2].model == "general_x4v3" and stages[2].height == 960   # best VMAF on the cartoon ground truth
-    assert pv.plan_candidates(_vp(1080, ["anime_like"]))[1] == []    # already large
+    assert not any(s.same_size for s in stages[:2])
+
+
+def test_a_large_cartoon_is_cleaned_at_its_own_size():
+    # no scale asked for: a cartoon above 720p keeps its size (the anime models run at x2 and are scaled back)
+    why, cands = pv.plan_candidates(_vp(1080, ["anime_like"]))
+    stages = [c[1]()[0] for c in cands]
+    assert [c[0] for c in cands] == ["anime esrgan-v3", "anime cugan", "free general-v3"] and "own size" in why
+    assert all(isinstance(s, video2x.AnimeSR) and s.scale == 2 and s.same_size for s in stages[:2])
+    assert stages[2].model == "general_x4v3" and stages[2].height == 1080
+    assert stages[0].describe().endswith(":same-size")
+    # asked for on a small cartoon too, and with a named model
+    why, cands = pv.plan_candidates(_vp(480, []), scale=1, content="anime", model="cugan-pro")
+    assert [c[0] for c in cands] == ["anime cugan-pro"] and cands[0][1]()[0].same_size
+    assert pv.plan_candidates(_vp(1080, ["anime_like"]), scale=2)[1][0][1]()[0].same_size is False   # 2x when asked
+    assert pv.plan_candidates(_vp(480, []), scale=5, content="anime")[1] == []
 
 
 def test_content_override_and_exact_scale():

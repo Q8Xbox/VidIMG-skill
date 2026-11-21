@@ -147,7 +147,7 @@ def read_yuv(src: Path, times: list[float]) -> list[tuple[np.ndarray, np.ndarray
     for t in times:
         b = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{t:.3f}",
                             "-i", str(src), "-map", "0:v:0", "-frames:v", "1", "-vf", f"crop={w}:{h}:0:0",
-                            "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], capture_output=True).stdout
+                            "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"], capture_output=True, stdin=subprocess.DEVNULL).stdout
         if len(b) < w * h * 3 // 2:
             continue
         a = np.frombuffer(b[: w * h * 3 // 2], np.uint8)

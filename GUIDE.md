@@ -178,6 +178,12 @@ on short previews, compares them side by side and picks one. It tells you in a f
 and starts one job that works through everything. Afterwards it looks at the before/after frames of each result
 and writes down what it sees. Claude chooses how a result should look; only the fidelity guard decides whether a
 result is faithful enough to deliver.
+
+**It gets better with use.** Claude does not send a video down a fixed route. It puts together a recipe for each
+one from a library of steps, and that library and Claude's experience both grow on your machine: when a video
+needs a step the tool does not have, Claude can add one to the library, and after every restoration the tool
+keeps a short record of what the video was like, what was done and how it turned out. The next time a similar
+video comes along, Claude starts from what worked.
 At the end you get one page (`index.html`) listing every item, what was decided, what was delivered and what kept
 its original, with links to the detailed before/after reports. If the job is interrupted, it continues where it
 stopped.

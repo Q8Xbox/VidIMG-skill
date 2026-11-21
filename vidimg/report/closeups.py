@@ -26,10 +26,17 @@ ZOOM = 3                        # ... enlarged this much, nearest neighbour (not
 
 def frames_at(src: Path, t: float, count: int = 1) -> list[np.ndarray]:
     """`count` consecutive frames from time t, as stored (BGR)."""
+    from .. import texture
     info = media.probe(src)
     w, h = info["width"], info["height"]
+    # the colour matrix named, by the tool's own rule (the file's tag or its sidecar, else by height): left to
+    # ffmpeg, an untagged HD source was read as BT.601 beside its BT.709-tagged result, and the source column of a
+    # recipe sheet looked lighter than every recipe (owner sample, 2026-11-21)
+    tag = (media.colour_hint(src) or {}).get("color_space") or texture._probe_stream(src).get("color_space")
+    matrix = texture._matrix(tag, h)
     cp = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{max(0.0, t):.3f}",
-                         "-i", str(src), "-map", "0:v:0", "-frames:v", str(count), "-pix_fmt", "bgr24", "-f", "rawvideo",
+                         "-i", str(src), "-map", "0:v:0", "-frames:v", str(count),
+                         "-vf", f"scale=in_color_matrix={matrix},format=bgr24", "-f", "rawvideo",
                          "-"], capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
     size = w * h * 3
     return [np.frombuffer(cp.stdout[i * size:(i + 1) * size], np.uint8).reshape(h, w, 3)

@@ -1,0 +1,42 @@
+{
+ "name": "residual_combing",
+ "kind": "filter",
+ "engine": "avisynth",
+ "addresses": [
+  "residual_combing"
+ ],
+ "what": "removes faint leftover comb teeth without deinterlacing again (Vinverse)",
+ "when": "an already deinterlaced source still shows faint horizontal teeth on moving edges",
+ "script": [
+  "Vinverse(sstr={strength}, amnt={limit})"
+ ],
+ "params": {
+  "strength": {
+   "type": "float",
+   "min": 1.0,
+   "max": 4.0,
+   "default": 2.7
+  },
+  "limit": {
+   "type": "int",
+   "min": 20,
+   "max": 255,
+   "default": 255
+  }
+ },
+ "presets": {
+  "light": {
+   "limit": 60
+  },
+  "strong": {
+   "limit": 255
+  }
+ },
+ "default_preset": "light",
+ "softens": "fine horizontal detail (thin drawn stripes)",
+ "status": "candidate",
+ "tried_on": [
+  "written from restoration practice; runs and passes the guard on a 15 s cut of an owner cartoon that does not show this defect (safe to try). Whether it helps on a source that has the defect is not shown yet"
+ ],
+ "version": 1
+}

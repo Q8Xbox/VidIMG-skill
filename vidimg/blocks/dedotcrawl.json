@@ -1,0 +1,44 @@
+{
+ "name": "dedotcrawl",
+ "kind": "filter",
+ "engine": "avisynth",
+ "addresses": [
+  "dot_crawl"
+ ],
+ "what": "calms the crawling checkerboard that composite video leaves along colour edges: luma is averaged over neighbouring frames only where it changes little from frame to frame (TemporalSoften on luma, scene changes excluded); moving picture and the chroma are untouched",
+ "when": "colour edges show a fine checkerboard that crawls or flickers while the picture there stands still",
+ "script": [
+  "TemporalSoften({radius}, {threshold}, 0, 20, 2)"
+ ],
+ "params": {
+  "radius": {
+   "type": "int",
+   "min": 1,
+   "max": 3,
+   "default": 2
+  },
+  "threshold": {
+   "type": "int",
+   "min": 6,
+   "max": 48,
+   "default": 30
+  }
+ },
+ "presets": {
+  "light": {
+   "radius": 1,
+   "threshold": 16
+  },
+  "medium": {
+   "radius": 2,
+   "threshold": 30
+  }
+ },
+ "default_preset": "medium",
+ "softens": "grain and faint slow movement in still areas (they are averaged over time too); the threshold must be above the crawl's strength and no higher",
+ "tried_on": [
+  "none of the owner samples has this defect, so it was created artificially on an owner cartoon cut: a luma checkerboard on colour edges flipping every frame: luma error 2.23 -> 0.86 at medium (1.15 at light), guard passed; ffmpeg's dedot in dot-crawl mode did less (1.53). Not yet tried on a real composite source"
+ ],
+ "status": "candidate",
+ "version": 1
+}

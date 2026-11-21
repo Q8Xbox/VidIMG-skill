@@ -43,9 +43,11 @@ mcp = FastMCP("vidimg", instructions=(
     "gives you (one file, many files, folders, a series): survey_media -> job_status until done -> LOOK at "
     "the contact sheets and each video's closeups, and correct the plan with decide_plan (try_recipes first "
     "when a look must settle the choice) -> run_plan -> job_status until done -> LOOK at the delivered "
-    "videos' before/after sheets and record review_results -> show the combined report. You supervise: the "
-    "measurements propose, you decide from what you see (content, model, texture, framing steps) and say "
-    "which and why, and the guard alone decides whether a result is faithful enough to deliver. Ask the "
+    "videos' before/after sheets and record review_results -> show the combined report. There are no fixed "
+    "paths: you compose a recipe for each video from the block library (which steps, in which order, which "
+    "models, at which size, drawn or real faces), drawing on the close-ups and on the similar cases the survey "
+    "returns; when no block fits what you see, add one with add_block. The guard alone decides whether a "
+    "result is faithful enough to deliver, and nothing you compose can change it. Ask the "
     "person only about opt-in steps they did not mention. The single-file tools "
     "(analyze_media, restore_photos, restore_video) remain for one-off or special requests. "
     "Never claim a result is faithful unless the guard passed it. Report to the person in English."))
@@ -130,6 +132,16 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               lines). Choose a filter only when the close-ups show its defect, the mildest strength that removes it,
               and say what you saw in the reason. The tool fixes the order, checks the script, and judges each pass
               with its guard; a pass that fails is dropped with a note. [] for none,
+      recipe (videos and series): the WHOLE treatment, composed by you; it replaces the keys above (they
+              remain as shorthand). {"faces": "drawn" | "real", "steps": [...], "models": [...], "model_strict":
+              false, "scale": 1 | 2 | 3 | 4 | null, "texture": 0..1 | null}. faces says how the guard judges
+              faces (advisory on drawings, strict on people) and is independent of the model. steps are blocks
+              from the survey's `blocks` list, in the order you want them run, each a name, "name:preset" or
+              {"block", "preset", "settings"}. models are tried in your order on the previews, then the usual
+              order unless model_strict. scale 1 keeps the size (an anime model then runs at x2 and is scaled
+              back). Start from the item's proposed_recipe and its similar_cases / history, and change what the
+              close-ups call for. Refused: a step that needs the source's frame numbers after one that changes
+              them, and an anime model with faces "real". Advice about order comes back in the reasons,
       skip true, reason "why you decided this" (shown in the report).
     When two or more recipes are plausible and the choice is about how the result looks, compare them with
     try_recipes first.
@@ -159,7 +171,8 @@ def try_recipes(plan: str, item_id: str, recipes: list[dict]) -> dict:
     per recipe whether the guard passed it. Use it when the analysis leaves a real choice that only a look can
     settle: which model keeps the line art and the painted backgrounds best, how much source texture to return
     (texture 1 / 0.5 / 0), with or without a clean-up filter and at which strength, with or without a framing
-    step. recipes: [{name, content, model, scale, texture, filters, remove_repeats, crop_borders}, ...]; anything left out comes from the item's current decision. Poll
+    step. recipes: [{name, recipe: {faces, steps, models, scale, texture}}, ...] (or the shorthand keys
+    content, model, scale, texture, filters, remove_repeats, crop_borders); anything left out comes from the item's current decision. Poll
     job_status; then LOOK at result items[...].trials.sheet, choose only among recipes the guard passed, tell the
     person which and why, and set it with decide_plan. Nothing is delivered by a trial. A trial costs a few
     minutes per recipe (the framing passes run on the whole video), so do not use it for choices the analysis
@@ -179,11 +192,67 @@ def try_recipes(plan: str, item_id: str, recipes: list[dict]) -> dict:
 
 
 @mcp.tool()
+def block_library() -> dict:
+    """The block library: every step a recipe can use, built-in and local, with what each does, when to use it,
+    its presets and settings, what it changes and what it costs, whether it is proven or still a candidate, and
+    its `record` on earlier videos (asked for, kept or dropped by the guard, how the results were reviewed).
+    `defects` lists what a restorer looks for, what each looks like, what measures it, and the blocks that address
+    it: an empty `blocks` list there is a gap, and the next video that shows that defect is the occasion to write
+    the block. The survey returns the same lists; call this outside a survey or after add_block / note_block."""
+    from vidimg import cases, library
+    blocks, problems = library.load()
+    return {"blocks": library.guide(blocks, cases.track_record()), "defects": library.coverage(blocks),
+            "skipped": problems, "local_folder": str(library.local_dir())}
+
+
+@mcp.tool()
+def add_block(definition: dict) -> dict:
+    """Add a new step to the local block library when a video shows a defect no existing block addresses. YOU
+    grow the list: from your own knowledge of how such a defect is restored (which filter, which settings, what it
+    costs), prompted by what the analysis measured (an item's `gaps`) or what you see on the close-ups. The library
+    then has it for this and every later video; nothing in the tool's code changes. A new block is a CANDIDATE
+    until a comparison shows it helps. definition:
+      {"name": "lower_case_name", "kind": "filter", "engine": "avisynth" | "ffmpeg",
+       "addresses": ["the defect(s) it is for: names from `defects`, or a new name"],
+       "what": "what it does", "when": "what you must SEE on the close-ups to use it",
+       "script": ["one or more lines; {setting} placeholders"],
+       "params": {"setting": {"type": "int" | "float" | "choice", "min": .., "max": .., "default": ..}},
+       "presets": {"light": {...}, "medium": {...}, "strong": {...}}, "default_preset": "light",
+       "softens": "what it costs", "tried_on": ["where it helped"]}
+    avisynth scripts use the pinned plugin set only (DeHalo_alpha, Deblock_QED, SMDegrain, SpotLess, KNLMeansCL,
+    vinverse, RgTools, masktools2, mvtools2, neo-fft3d, neo-dfttest, DePan, QTGMC helpers); ffmpeg scripts are a
+    plain chain of allow-listed clean-up filters. A block is a picture filter: it keeps every frame, its size and
+    its rate, loads nothing, writes nothing, and does not sharpen (sharpening before the model compounds halos).
+    You do not choose its check: every scripted block is judged by the full video guard. After adding it, TRY it
+    with try_recipes against the recipe without it and look at the sheet before using it in a real run; then
+    record what you saw with note_block (and whether it is proven). Returns the stored block, or the reason it was
+    refused."""
+    from vidimg import library
+    path = library.save_local(definition)
+    blocks, _ = library.load()
+    return {"saved": str(path), "block": next(g for g in library.guide(blocks) if g["block"] == definition["name"])}
+
+
+@mcp.tool()
+def note_block(name: str, note: str, proven: bool | None = None) -> dict:
+    """Record what a trial or a run showed about a block, built-in or local: on what kind of source, at which
+    preset, what changed and what it cost ("VHS cartoon, light: the rim beside lines is gone, lines keep their
+    weight; strong ate thin lines"). proven=true when a side-by-side comparison showed it helps (a candidate becomes
+    proven), proven=false when it did not (it stays or goes back to candidate), omit to add the note only. The
+    note appears in the block's tried_on for every later decision. This is how the library learns from the videos."""
+    from vidimg import library
+    b = library.note(name, note, proven)
+    return {"block": b.name, "status": b.status, "tried_on": b.tried_on}
+
+
+@mcp.tool()
 def review_results(plan: str, reviews: dict[str, dict]) -> dict:
     """After run_plan: record how each delivered video LOOKS. Open the before/after sheets of every delivered
     item (result.sheets) and judge what the guard cannot: do the lines stay clean, did painted backgrounds turn
     to smooth blobs, are halos or blocks sharper than before, does anything look worse than the source.
-    reviews: {item_id: {verdict: 'good' | 'acceptable' | 'redo', notes: "what you saw"}}. 'acceptable' names what
+    reviews: {item_id: {verdict: 'good' | 'acceptable' | 'redo', notes: "what you saw", person_verdict: "the
+    person's own words about this result, when they gave any"}}. The review joins the video's case in the case
+    library, where the next survey finds it for similar sources. 'acceptable' names what
     is not ideal; 'redo' sets the item back to pending: change its decision with decide_plan (another model, less
     or more texture, a framing step) and run_plan again. The verdict and notes go into the combined report, and
     you tell the person the same. Returns the summary."""
@@ -251,7 +320,7 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
                   scale: float | None = None, content: str = "auto", model: str | None = None,
                   engine: str | None = None, mask_tape_noise: bool = False, texture: float | None = None,
                   model_strict: bool = False, remove_repeats: bool = False, crop_borders: bool = False,
-                  filters: list | None = None) -> dict:
+                  filters: list | None = None, recipe: dict | None = None) -> dict:
     """Start a background job restoring one video: analyse; classical field handling first when needed
     (QTGMC for interlace, TFM+TDecimate for telecine, chroma-shift correction, sRestore for blended fields
     from a standards conversion); open-model candidates on three guarded preview
@@ -283,9 +352,14 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     filters: clean-up you compose for this source, run before the model: "deinterlace_scenes" (analyze_media's
     profile.combing shows interlaced stretches), {"name": "deblock", "strength": "light|medium|strong"},
     {"name": "dehalo", "strength": ...}; only what the frames show is needed, mildest strength first.
-    Returns the job; poll job_status(job_id)."""
+    recipe: the whole treatment composed by you from block_library(), as in decide_plan: {"faces", "steps",
+    "models", "model_strict", "scale", "texture"}. It replaces content / model / scale / filters / remove_repeats /
+    crop_borders / texture. Returns the job; poll job_status(job_id)."""
     from vidimg import cleanup
+    from vidimg import recipe as recipe_mod
     chosen = cleanup.parse(filters)
+    if recipe is not None:
+        recipe = recipe_mod.validate(recipe)[0]
     src = _existing(path)
     if src.suffix.lower() not in VIDEO_EXT:
         raise ValueError(f"not a video: {src.name}")
@@ -306,6 +380,11 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
             + (["--remove-repeats"] if remove_repeats else []) + (["--crop-borders"] if crop_borders else [])
             + (["--filters", ",".join(f["name"] + (":" + f["strength"] if f.get("strength") else "") for f in chosen)]
                if chosen else []))
+    if recipe is not None:
+        spec = out / "recipe.json"
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps(recipe, indent=1, ensure_ascii=False), encoding="utf-8")
+        args += ["--recipe", str(spec)]
     return jobs.start("restore-video", args, out, src.name)
 
 

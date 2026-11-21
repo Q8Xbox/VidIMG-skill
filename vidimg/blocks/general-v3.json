@@ -1,0 +1,13 @@
+{
+ "name": "general-v3",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "free",
+ "what": "Real-ESRGAN general-v3 (open model): fast, sharp; reshapes faces a little more than the faithful models and can invent hatching in smeared textures",
+ "when": "real footage when the faithful models would take too long; a fallback for cartoons",
+ "spec": {
+  "model": "general_x4v3",
+  "label": "free general-v3"
+ },
+ "version": 1
+}

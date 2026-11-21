@@ -241,3 +241,24 @@ def test_closeups_show_line_art_not_the_channel_logo(tmp_path):
                                   tmp_path / "recipes.jpg", cell=200)
     assert sheet and sheet.exists()
     assert closeups.recipe_sheet([("source", [])], tmp_path / "none.jpg") is None
+
+
+@needs_ffmpeg
+def test_closeup_frames_follow_the_tools_colour_rule(tmp_path):
+    from vidimg.report import closeups
+
+    def read(path, size, matrix):
+        raw = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", "0.2", "-i", str(path),
+                              "-frames:v", "1", "-vf", f"scale=in_color_matrix={matrix},format=bgr24", "-f", "rawvideo",
+                              "-"], capture_output=True, stdin=subprocess.DEVNULL).stdout
+        return np.frombuffer(raw, np.uint8).reshape(size[1], size[0], 3).astype(int)
+
+    for size, rule, other in (((1280, 720), "bt709", "bt601"), ((640, 480), "bt601", "bt709")):   # untagged files
+        clip = tmp_path / f"{size[1]}.mkv"
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+                        f"testsrc2=size={size[0]}x{size[1]}:rate=25:duration=1", "-pix_fmt", "yuv420p", "-c:v", "ffv1",
+                        str(clip)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
+        got = closeups.frames_at(clip, 0.2)[0].astype(int)
+        assert float(np.abs(got - read(clip, size, rule)).mean()) < 0.01       # HD as BT.709, SD as BT.601 ...
+        assert float(np.abs(got - read(clip, size, other)).mean()) > 1.0       # ... and the two do differ
+    assert len(closeups.frames_at(clip, 0.0, 3)) == 3

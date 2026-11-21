@@ -1,0 +1,33 @@
+{
+ "name": "derainbow",
+ "kind": "filter",
+ "engine": "ffmpeg",
+ "addresses": [
+  "rainbows"
+ ],
+ "what": "removes the shimmering colour bands that composite video leaves on fine detail (ffmpeg dedot, cross-colour mode): where the colour of a pixel flips from frame to frame while its neighbours in time agree, it is averaged with them; the luma is untouched",
+ "when": "fine black-and-white detail (hatching, text, striped clothes) shows colour bands that shimmer from frame to frame",
+ "script": [
+  "dedot=m=rainbows:tc={tc}:ct={ct}"
+ ],
+ "params": {
+  "tc": {
+   "type": "float",
+   "min": 0.02,
+   "max": 0.3,
+   "default": 0.058
+  },
+  "ct": {
+   "type": "float",
+   "min": 0.005,
+   "max": 0.1,
+   "default": 0.019
+  }
+ },
+ "softens": "fast real colour changes in small areas (a blinking coloured light)",
+ "tried_on": [
+  "none of the owner samples has this defect, so it was created artificially on an owner cartoon cut: colour stripes on luma edges flipping every frame: chroma error 1.90 -> 0.64 at the default settings, luma unchanged, guard passed. Higher thresholds were worse (0.96), and a motion-compensated chroma degrain did nothing (1.87). Not yet tried on a real composite source"
+ ],
+ "status": "candidate",
+ "version": 1
+}

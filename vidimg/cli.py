@@ -6,6 +6,7 @@ run-plan --out FOLDER              run (or continue) the plan in FOLDER: everyth
 try-recipes ITEM FILE --out FOLDER compare 2-4 recipes (a JSON list) on one video's guarded previews, side by side
 restore PHOTOS_OR_FOLDERS [--out]  photo pipeline: analyse, restore, guard, review page
 restore-video VIDEO [--out]        video pipeline: field handling, guarded previews, full run, report
+blocks                             the block library: every step a recipe can use (built-in and local)
 restore-series FOLDER [--episodes] numbered episodes into ONE folder, resumable, + one series report
 analyze FILE                       measured degradation profile of a photo or video (writes nothing)
 verify ORIGINAL RESULT             fidelity guard on any pair (photo or video)
@@ -58,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("doctor")
+    sub.add_parser("blocks", help="the block library: every step a recipe can use (built-in and local)")
 
     au = sub.add_parser("auto", help="survey photos, videos and series folders into one plan with decisions filled in")
     au.add_argument("inputs", nargs="+", type=Path, help="files and/or folders (searched recursively)")
@@ -94,6 +96,9 @@ def main(argv: list[str] | None = None) -> int:
                           "torch, or mlrt (ONNX Runtime DirectML, any DirectX 12 GPU)")
     rvv.add_argument("--mask-tape-noise", action="store_true",
                      help="opt-in: black out VHS head-switching noise found in the bottom lines")
+    rvv.add_argument("--recipe", type=Path, default=None,
+                     help="JSON file with the recipe for this video (faces, steps, models, scale, texture; see "
+                          "vidimg/recipe.py and `vidimg blocks`); replaces --content/--model/--scale/--filters")
     rvv.add_argument("--filters", default=None,
                      help="clean-up before the model, from the catalogue (vidimg/cleanup.py), e.g. "
                           "deinterlace_scenes,deblock:light,dehalo:medium")
@@ -170,6 +175,14 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("--texture must be between 0 and 1")
         config.TEXTURE_STRENGTH = a.texture
 
+    if a.cmd == "blocks":
+        from . import library
+        blocks, problems = library.load()
+        from . import cases
+        print(json.dumps({"blocks": library.guide(blocks, cases.track_record()), "defects": library.coverage(blocks),
+                          "skipped": problems, "local_folder": str(library.local_dir())}, indent=1, ensure_ascii=False))
+        return 0
+
     if a.cmd == "try-recipes":
         import time
         from . import auto
@@ -219,7 +232,8 @@ def main(argv: list[str] | None = None) -> int:
                                            on_progress=progress, scale=a.scale, content=a.content,
                                            model=a.model or a.prefer, model_strict=a.prefer is None,
                                            mask_tape_noise=a.mask_tape_noise, remove_repeats=a.remove_repeats,
-                                           crop_borders=a.crop_borders, filters=a.filters)
+                                           crop_borders=a.crop_borders, filters=a.filters,
+                                           recipe=json.loads(a.recipe.read_text(encoding="utf-8")) if a.recipe else None)
         print()
         out.mkdir(parents=True, exist_ok=True)
         (out / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, ensure_ascii=False, default=str),

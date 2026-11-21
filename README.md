@@ -63,6 +63,35 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   video's guarded previews and lays them side by side, so the choice between models or texture strengths is made
   by looking; only recipes the guard passed can be chosen. After the run Claude looks at the before/after sheets
   and records a review (`review_results`: good, acceptable, redo) that appears in the report.
+- **No fixed paths: a recipe per video, from a library that grows.** The pipeline does not route a video down
+  an "anime" or a "real footage" path. Every step is a block in a library (`vidimg/library.py`): field handling,
+  un-blending, deinterlacing stretches, removing copied frames, cropping bars, the picture filters, every model,
+  the texture return. Claude composes a recipe for each video (`vidimg/recipe.py`): whether the faces are drawn
+  or real (that alone sets how strictly the guard judges faces), which steps in which order, which models, at
+  which size (any model at any size: an anime model at the source's own size runs at x2 and is scaled back), how
+  much texture. Only what cannot work is refused; advice about order comes back as notes. The older settings
+  (`content`, `model`, `scale`, `filters`, ...) still work and are read as a recipe.
+  - **Blocks are data.** A block is one JSON file (`vidimg/blocks/`, and `<output root>/library/blocks/` for the
+    ones added on this machine): what it does, when to use it, its script with settings and presets, what it
+    costs. Adding a tool is adding a file (`add_block`); no code changes. A scripted block is bounded: a picture
+    filter that keeps every frame, its size and its rate, from the private plugin set or an allow-list of ffmpeg
+    filters, loading and writing nothing, never sharpening before the model. It cannot choose its own check:
+    every scripted block is judged by the full video guard. The one exception is made in code, not in a block:
+    a step that moves the picture (`stabilise`, for a trembling picture) is judged by a check written for it,
+    which lines each frame up with its source before comparing them, limits how far a frame may move, and
+    requires the picture to come out steadier; only a block shipped with the tool may name such a check.
+  - **The library grows from knowledge and from the videos.** `vidimg/defects.json` lists what a restorer looks
+    for (halos, rainbows, dot crawl, banding, spots, jitter, ...), what each looks like and what measures it, if
+    anything; each block names the defects it addresses. A defect with no block is a gap: the survey reports the
+    gaps a video was measured to have, and Claude writes the missing block from what it knows about restoring
+    that defect. A new block is a candidate until a side-by-side comparison shows it helps (`note_block` records
+    what was seen and marks it proven); a candidate in a recipe draws a note to compare first. Every block also
+    carries its record from the case library: how often it was asked for, kept or dropped by the guard, and how
+    the results were reviewed.
+  - **Every video leaves a case.** After a run its case is written to `<output root>/library/cases/`: the
+    measurements, the recipe, what the guard said, the review, the person's verdict. The next survey shows the
+    most similar earlier cases beside each new video, and the file's own earlier runs.
+  - **The guard is code and stays code.** Nothing in a recipe or a block can change what counts as faithful.
 - **Clean-up composed per video** (`filters`, on Claude's decision, before the model; `vidimg/cleanup.py`): a
   restorer writes a script for each source, so Claude picks from a small catalogue what the close-ups call for
   and the tool builds, checks and guards the script. `deinterlace_scenes` deinterlaces only the interlaced
@@ -115,7 +144,8 @@ Or ask in plain words ("restore the photos in this folder"): the `restore-media`
 (`.claude/skills/restore-media/SKILL.md`) holds the workflow and the approved policy.
 
 MCP tools (`vidimg/mcp_server.py`): `doctor`, `survey_media`, `decide_plan`, `try_recipes`, `run_plan`,
-`review_results` (the automatic flow),
+`review_results` (the automatic flow), `block_library`, `add_block`, `note_block` (the library recipes are
+composed from, and how it grows),
 `analyze_media`, `restore_photos`, `restore_video`, `job_status`, `list_jobs`, `cancel_job`, `resume_job`,
 `verify_restoration`, `compare_frames`.
 Restorations run as detached background jobs (`vidimg/jobs.py`, files under `<output root>/jobs/`), one GPU

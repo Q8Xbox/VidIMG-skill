@@ -1,0 +1,20 @@
+{
+ "name": "antialias",
+ "kind": "filter",
+ "engine": "avisynth",
+ "addresses": [
+  "stair_steps"
+ ],
+ "what": "rebuilds jagged, stair-stepped lines left by an earlier bad deinterlace or line-doubling: each field is re-interpolated with an edge-directed interpolator (nnedi3) and the two results are averaged",
+ "when": "diagonal lines and curves show regular steps, or every second line repeats the one above it",
+ "script": [
+  "__a = last",
+  "Merge(__a.nnedi3(field=0), __a.nnedi3(field=1))"
+ ],
+ "softens": "fine vertical detail everywhere (every line is re-interpolated); it cannot bring back the detail the bad deinterlace threw away",
+ "tried_on": [
+  "none of the owner samples has this defect, so it was created artificially on an owner cartoon cut: one field kept and line-doubled: identical line pairs 0.00 -> 0.92 on a measure where the clean cut reads 0.95, guard passed. QTGMC's repair modes left most of the pairing (0.25). The error against the clean cut did not fall (0.78 -> 0.85): the lines are smooth again, the lost detail is not back. Not yet tried on a real source"
+ ],
+ "status": "candidate",
+ "version": 1
+}

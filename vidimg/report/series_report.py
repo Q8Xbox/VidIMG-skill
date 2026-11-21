@@ -29,7 +29,7 @@ from .compare import VIDEO_GATE_NAMES
 def _stream(path: Path) -> dict:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                         "stream=width,height,sample_aspect_ratio,display_aspect_ratio,codec_name,pix_fmt"
-                        ":format=duration,size,bit_rate", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+                        ":format=duration,size,bit_rate", "-of", "json", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     j = json.loads(r.stdout or "{}")
     s, f = (j.get("streams") or [{}])[0], j.get("format") or {}
     a, _, b = (s.get("sample_aspect_ratio") or "1:1").partition(":")
@@ -45,7 +45,7 @@ def _stream(path: Path) -> dict:
 
 def _grab(path: Path, t: float, w: int, h: int) -> np.ndarray:
     raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", str(path), "-frames:v", "1",
-                          "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], capture_output=True, check=True).stdout
+                          "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], capture_output=True, check=True, stdin=subprocess.DEVNULL).stdout
     return np.frombuffer(raw[: w * h * 3], np.uint8).reshape(h, w, 3)
 
 

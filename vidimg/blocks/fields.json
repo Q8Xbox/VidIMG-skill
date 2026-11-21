@@ -1,0 +1,27 @@
+{
+ "name": "fields",
+ "kind": "field",
+ "engine": "builtin",
+ "runner": "fields",
+ "what": "classical field handling planned from the measurements: QTGMC for interlace, TFM+TDecimate for telecine, sRestore for blended fields or frames, chroma-shift correction, the tape-noise mask when asked; deinterlacing, inverse telecine and un-blending change the frame count, chroma-shift correction and the mask do not",
+ "when": "the analysis flags interlaced, telecine, blended or chroma_shift (it does nothing otherwise); first in almost every recipe, because every later step and every model needs clean progressive frames",
+ "changes": [],
+ "version": 1,
+ "params": {
+  "mask_tape_noise": {
+   "type": "choice",
+   "choices": [
+    false,
+    true
+   ],
+   "default": false
+  }
+ },
+ "addresses": [
+  "interlaced",
+  "telecine",
+  "blended",
+  "chroma_shift",
+  "head_switching"
+ ]
+}

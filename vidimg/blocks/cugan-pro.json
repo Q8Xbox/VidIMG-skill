@@ -1,0 +1,23 @@
+{
+ "name": "cugan-pro",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "video2x",
+ "needs": [
+  "drawn_faces"
+ ],
+ "what": "Real-CUGAN pro (Video2X): closest line weight; the anime model that kept realistic drawn faces best",
+ "when": "cartoons with realistic drawn faces",
+ "spec": {
+  "processor": "realcugan",
+  "model": "models-pro",
+  "scales": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "label": "anime cugan-pro"
+ },
+ "version": 1
+}

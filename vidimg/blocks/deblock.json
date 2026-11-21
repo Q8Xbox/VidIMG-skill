@@ -1,0 +1,53 @@
+{
+ "name": "deblock",
+ "kind": "filter",
+ "engine": "avisynth",
+ "what": "smooths the 8x8 block edges of a starved MPEG encode (Deblock_QED), strongest on the block borders and gentle inside the blocks",
+ "when": "the line close-ups show a grid of square blocks in flat colours or around lines; light for faint blocks, strong only for heavy ones",
+ "script": [
+  "Deblock_QED(quant1={quant1}, quant2={quant2})"
+ ],
+ "params": {
+  "quant1": {
+   "type": "int",
+   "min": 10,
+   "max": 40,
+   "default": 24
+  },
+  "quant2": {
+   "type": "int",
+   "min": 10,
+   "max": 44,
+   "default": 26
+  }
+ },
+ "presets": {
+  "light": {
+   "quant1": 18,
+   "quant2": 20
+  },
+  "medium": {
+   "quant1": 24,
+   "quant2": 26
+  },
+  "strong": {
+   "quant1": 30,
+   "quant2": 34
+  }
+ },
+ "default_preset": "medium",
+ "needs": [
+  "untouched_grid"
+ ],
+ "effect": {
+  "metric": "blockiness"
+ },
+ "softens": "fine texture inside flat areas",
+ "tried_on": [
+  "owner VHS-era cartoon cut: block level falls at every strength; the visible change is slight"
+ ],
+ "version": 1,
+ "addresses": [
+  "block_edges"
+ ]
+}

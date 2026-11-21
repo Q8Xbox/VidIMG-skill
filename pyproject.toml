@@ -22,6 +22,10 @@ dependencies = [
 [tool.setuptools.packages.find]
 include = ["vidimg*"]
 
+# the block library and the defect list are data, read at run time (vidimg/library.py)
+[tool.setuptools.package-data]
+vidimg = ["blocks/*.json", "defects.json"]
+
 [project.scripts]
 vidimg = "vidimg.cli:main"
 

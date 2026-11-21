@@ -1,0 +1,50 @@
+{
+ "name": "despot",
+ "kind": "filter",
+ "engine": "avisynth",
+ "addresses": [
+  "spots"
+ ],
+ "what": "removes marks that exist on one frame only (film dust and dirt, tape dropouts): each frame is compared with its two neighbours after they are moved onto it (motion compensation), and only where it differs strongly from both is it replaced by their median",
+ "when": "the frame strip shows marks that are on one frame and gone on the next",
+ "script": [
+  "__c = last",
+  "__sup = MSuper(__c, pel=2, sharp=2)",
+  "__vec = MAnalyse(__sup, multi=true, delta=1, blksize=8, overlap=4, truemotion=true, search=5)",
+  "__med = MCompensate(__c, __sup, __vec, tr=1, thSAD={thsad}).Clense().SelectEvery(3, 1)",
+  "__spot = mt_lutxy(__c, __med, expr=\"x y - abs\", scale_inputs=\"allf\", use_expr=2).mt_binarize(threshold={threshold}).mt_expand().mt_expand()",
+  "mt_merge(__c, __med, __spot, luma=true)"
+ ],
+ "params": {
+  "threshold": {
+   "type": "int",
+   "min": 6,
+   "max": 60,
+   "default": 20
+  },
+  "thsad": {
+   "type": "int",
+   "min": 2000,
+   "max": 20000,
+   "default": 10000
+  }
+ },
+ "presets": {
+  "light": {
+   "threshold": 30
+  },
+  "medium": {
+   "threshold": 20
+  },
+  "strong": {
+   "threshold": 12
+  }
+ },
+ "default_preset": "medium",
+ "softens": "anything that really lasts one frame only: fast small objects, rain, sparks, a drawn flash; lower thresholds also touch fast line art",
+ "status": "candidate",
+ "tried_on": [
+  "written from pinned plugins only (mvtools2, RgTools, masktools2) after the pinned SpotLess script turned out to need a plugin the set does not have. On an owner cartoon cut with five artificial one-frame specks (white and black, 2 to 9 px): mean error at the specks 111 -> 1 levels at every preset, 0.03 % of the pixels of a clean frame changed at most, guard passed. Not yet tried on real film dirt or tape dropouts"
+ ],
+ "version": 1
+}

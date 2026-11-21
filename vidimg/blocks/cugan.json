@@ -1,0 +1,23 @@
+{
+ "name": "cugan",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "video2x",
+ "needs": [
+  "drawn_faces"
+ ],
+ "what": "Real-CUGAN se (Video2X): close to anime-v3, a little more texture kept; it thinned some lines on one owner sample",
+ "when": "hand-drawn animation; needs the faces declared drawn (these models reshape real faces)",
+ "spec": {
+  "processor": "realcugan",
+  "model": "models-se",
+  "scales": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "label": "anime cugan"
+ },
+ "version": 1
+}

@@ -1,0 +1,19 @@
+{
+ "name": "remove_repeats",
+ "kind": "framing",
+ "engine": "builtin",
+ "runner": "derepeat",
+ "what": "drops the copied frames of a slower original padded to 29.97 fps, back to its own rate (25 or 23.976); only chooses frames",
+ "when": "the analysis found a padding cycle AND the frames marked COPY on the close-up strip repeat a drawing in the middle of a movement",
+ "changes": [
+  "frame_count",
+  "frame_rate"
+ ],
+ "tried_on": [
+  "owner cartoon padded 25 -> 29.97: 38720 -> 32299 frames"
+ ],
+ "version": 1,
+ "addresses": [
+  "padded_repeats"
+ ]
+}
