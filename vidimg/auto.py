@@ -135,8 +135,13 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
     findings = _findings(prof)
     try:
         from .report import closeups
+        ghost = None
+        if "ghost_frames" in prof.flags:
+            from .probe import ghosts
+            ghost = ghosts.example(src)
         close = closeups.sheet(src, out / "survey" / f"{item_id}_closeups.jpg", borders=prof.borders,
-                               repeats=prof.repeats, combing=prof.combing, title=f"{item_id}  {src.name}")
+                               repeats=prof.repeats, combing=prof.combing, ghost=ghost,
+                               title=f"{item_id}  {src.name}")
     except Exception as e:  # noqa: BLE001  (an aid for the decision; the survey goes on without it)
         close = None
         log(f"   {item_id}: close-ups failed ({e})")
@@ -187,6 +192,14 @@ def _findings(prof) -> list[dict]:
                             "a model sharpens them into a grid",
                     "decision": "filters: deblock (light, medium or strong)",
                     "look": "the line close-ups: a grid of square blocks in flat colours or along lines?"})
+    if "ghost_frames" in prof.flags:
+        bl = getattr(prof, "blend", None) or {}
+        out.append({"finding": "ghost_frames",
+                    "what": f"about {bl.get('share', 0):.0%} of the moving frames are double images: mixes of the "
+                            f"picture before and the picture after (a {prof.fps:g} fps copy made with blending); a model "
+                            "redraws them with crisp double outlines",
+                    "decision": "step: deghost",
+                    "look": "the frame strip: does a frame show two drawings at once that its neighbours show singly?"})
     if "black_borders" in prof.flags:
         out.append({"finding": "black_borders",
                     "what": f"black bars: left {b.get('left')}, right {b.get('right')}, top {b.get('top')}, bottom "

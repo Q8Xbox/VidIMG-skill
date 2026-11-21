@@ -112,7 +112,7 @@ def comb_zoom(frame: np.ndarray, cell: tuple[int, int] = CELL, zoom: int = ZOOM)
 
 
 def sheet(src: Path, dst: Path, *, borders: dict | None = None, repeats: dict | None = None,
-          combing: dict | None = None, title: str = "") -> Path | None:
+          combing: dict | None = None, ghost: list | None = None, title: str = "") -> Path | None:
     """The diagnosis sheet for one video (see the module text). None when no frame could be read."""
     src, dst = Path(src), Path(dst)
     info = media.probe(src)
@@ -141,6 +141,20 @@ def sheet(src: Path, dst: Path, *, borders: dict | None = None, repeats: dict | 
             cv2.putText(head, f"measured interlaced stretches: {len(c['spans'])} spans, {c.get('span_frames')} frames "
                               "(interlacing, or thin drawn stripes?)", (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                         (255, 255, 255), 1, cv2.LINE_AA)
+            rows += [head, _row(cells, width)]
+    if ghost:
+        i, j = int(ghost[0]), int(ghost[1])
+        fr = frames_at(src, 0.0, 3, index=max(0, i - 1))
+        if len(fr) == 3:
+            cw = width // 3
+            cells = []
+            for k, f in enumerate(fr):
+                small = cv2.resize(f, (cw, round(f.shape[0] * cw / f.shape[1])), interpolation=cv2.INTER_AREA)
+                label = f"frame {i - 1 + k}" + (" GHOST?" if k == 1 else (" (would be shown instead)" if i - 1 + k == j else ""))
+                cells.append(_label(small, label, (0, 255, 255) if k == 1 else (255, 255, 255)))
+            head = np.full((26, width, 3), 30, np.uint8)
+            cv2.putText(head, "measured ghost frame, between its neighbours (two drawings at once, shown singly beside it?)",
+                        (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             rows += [head, _row(cells, width)]
     b = borders or {}
     if b.get("has_borders"):

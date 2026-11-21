@@ -31,10 +31,11 @@ from . import media
 from .adapters import AdapterResult, mark_output, safe_output_dir
 from . import texture as texture_pass
 from .guard.video import (_ffmpeg, _frames_by_index, verify_chroma, verify_cleanup, verify_crop, verify_deblend,
-                          verify_derepeat, verify_mask, verify_moved, verify_spans, verify_video)
+                          verify_deghost, verify_derepeat, verify_mask, verify_moved, verify_spans, verify_video)
 from .probe import blend as blend_probe
 from .probe import chroma as chroma_probe
 from .probe import framing as framing_probe
+from .probe import ghosts as ghosts_probe
 from .probe import video as probe
 
 PREVIEW_SECONDS = 4.0
@@ -946,7 +947,23 @@ def _step_crop(c: dict, settings: dict) -> bool:
     return True
 
 
-STEP_RUNNERS = {"fields": _step_fields, "spans": _step_spans, "derepeat": _step_derepeat, "crop": _step_crop}
+def _step_deghost(c: dict, settings: dict) -> bool:
+    rec = c["rec"]
+    out, d = run_deghost(c["base"], c["work"], c["log"])
+    rec.prepass["deghost"] = d
+    if out is not None:
+        c["base"] = out
+        rec.notes.append(f"ghost frames replaced: {d['count']} of {d['frames']} frames were mixes of the picture before "
+                         "and the picture after and now show the neighbour they held more of; every frame of the "
+                         "result is a frame of the source"
+                         + (f" ({d['in_runs']} mixes in runs were left: dissolves)" if d.get("in_runs") else ""))
+    else:
+        rec.notes.append(f"ghost frames not replaced: {d.get('skipped')}")
+    return True
+
+
+STEP_RUNNERS = {"fields": _step_fields, "spans": _step_spans, "derepeat": _step_derepeat, "crop": _step_crop,
+                "deghost": _step_deghost}
 
 
 def run_steps(c: dict, steps: list[dict], blocks: dict) -> bool:
@@ -974,6 +991,55 @@ def run_steps(c: dict, steps: list[dict], blocks: dict) -> bool:
         else:
             c["rec"].notes.append(f"clean-up asked for but not applied ({info['said']}): {info.get('skipped')}")
     return True
+
+
+# ----------------------------------------------------------------------------- ghost frames (probe/ghosts.py)
+def run_deghost(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
+    """Replace each ghost frame (a mix of its two neighbours) by the neighbour it holds more of. None when it was
+    not done or did not pass its guard: the caller keeps the input."""
+    gdir = work / "deghost"
+    dst, done = gdir / "deghost.nut", gdir / "deghost.done"
+    made_by = fingerprint(base.name, base.stat().st_size, "deghost")
+    if dst.exists() and done.exists():
+        info = json.loads(done.read_text(encoding="utf-8"))
+        if info.get("fingerprint") == made_by:
+            log(f"   ghost frames: reusing the finished pass ({info.get('count')} replaced)")
+            return dst, info | {"reused": True}
+        shutil.rmtree(gdir, ignore_errors=True)
+        shutil.rmtree(work / "chunks", ignore_errors=True)
+    ok, why = avs.available()
+    if not ok:
+        return None, {"skipped": f"AviSynth+ not available ({why}); the ghost frames stay"}
+    found = ghosts_probe.scan(base)
+    info: dict = {"frames": found.frames, "judged": found.judged, "count": len(found.ghosts), "in_runs": found.in_runs}
+    if found.error:
+        return None, info | {"skipped": found.error}
+    if not found.ghosts:
+        return None, info | {"skipped": "no ghost frame was found"}
+    log(f"   ghost frames: {len(found.ghosts)} of {found.frames} frames are mixes of their neighbours "
+        f"({found.in_runs} more in runs, left as dissolves)")
+    pairs = [[i, j] for i, j, _ in found.ghosts]
+    gdir.mkdir(parents=True, exist_ok=True)
+    (gdir / "ghosts.json").write_text(json.dumps(found.to_dict()), encoding="utf-8")
+    r = avs.render(base, dst, [avs.ReplaceFrames(pairs=pairs)], work=gdir)
+    info.update(engine="avisynth", ok=r.ok, error=r.error)
+    if not r.ok:
+        info["skipped"] = f"the pass failed: {r.error}"
+        return None, info
+    colour = media.colour_hint(base) or media.colour_hint(dst)
+    info["colour"] = media.write_colour_sidecar(dst, colour) if colour else {}
+    info["av_sync"] = media.fix_av_offset(base, dst)
+    info["aspect"] = media.fix_aspect(base, dst)
+    rep_ = verify_deghost(base, dst, pairs=pairs)
+    info["guard"] = {g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates}
+    info["guard_passed"] = rep_.passed
+    log(f"   ghost frames replaced: guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if not rep_.passed:
+        info["skipped"] = f"the pass failed its guard ({', '.join(rep_.failed())}): the ghost frames stay"
+        return None, info
+    info["fingerprint"] = made_by
+    done.write_text(json.dumps(info, default=str), encoding="utf-8")
+    return dst, info
 
 
 # ----------------------------------------------------------------------------- padded repeats, black borders
@@ -1522,7 +1588,7 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     return rec
 
 
-BULKY = ("chunks", "model", "previews", "deblend", "deblend_trials", "derepeat", "crop", "spans", "cleanup", "rejected", "prepass.nut", "prepass.nut.colour.json", "prepass.lwi",
+BULKY = ("chunks", "model", "previews", "deblend", "deblend_trials", "derepeat", "crop", "spans", "cleanup", "deghost", "rejected", "prepass.nut", "prepass.nut.colour.json", "prepass.lwi",
          "cuts.json")
 
 

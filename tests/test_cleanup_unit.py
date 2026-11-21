@@ -269,3 +269,43 @@ def test_the_guard_finds_the_original_frames_in_an_interpolated_file(tmp_path):
     shifted = write(tmp_path / "shifted.mkv", made[1:] + [frames[-1], frames[-1]], 30)
     bad = verify_video(src, shifted, interpolated=True, samples=6)
     assert [g.name for g in bad.gates if g.status == "fail" and g.name in picture]
+
+
+@needs_ffmpeg
+def test_the_ghost_check_wants_the_neighbours_in_place_and_the_ghosts_gone(tmp_path):
+    import cv2
+    import numpy as np
+    from vidimg.guard.video import verify_deghost
+    from vidimg.probe import ghosts
+
+    rng = np.random.default_rng(4)
+    base = cv2.GaussianBlur(cv2.resize((rng.random((9, 12)) * 255).astype(np.uint8), (320, 240), interpolation=cv2.INTER_CUBIC), (0, 0), 2)
+    clean = [np.roll(base, 6 * k, axis=1) for k in range(40)]
+    mix = lambda x, y: ((x.astype(np.float32) + y.astype(np.float32)) / 2).astype(np.uint8)  # noqa: E731
+    ghosted = list(clean)
+    for i in (7, 18, 29):
+        ghosted[i] = mix(clean[i - 1], clean[i + 1])
+
+    def write(path, seq):
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "gray",
+                        "-s", "320x240", "-r", "10", "-i", "-", "-c:v", "ffv1", "-pix_fmt", "yuv420p", str(path)],
+                       input=b"".join(f.tobytes() for f in seq), check=True, capture_output=True)
+        return path
+
+    src = write(tmp_path / "ghosted.mkv", ghosted)
+    found = ghosts.scan(src)
+    assert found.error is None and found.frames == 40 and [g[0] for g in found.ghosts] == [7, 18, 29]
+    pairs = [[i, j] for i, j, _ in found.ghosts]
+    fixed = list(ghosted)
+    for i, j in pairs:
+        fixed[i] = ghosted[j]
+    rep = verify_deghost(src, write(tmp_path / "fixed.mkv", fixed), pairs=pairs)
+    assert rep.passed, [(g.name, g.value, g.detail) for g in rep.gates if g.status == "fail"]
+    assert "ghosts" in verify_deghost(src, src, pairs=pairs).failed()                 # nothing was replaced
+    wrong = list(fixed)
+    wrong[7] = clean[20]                                                              # not the neighbour it was to become
+    assert "replaced" in verify_deghost(src, write(tmp_path / "wrong.mkv", wrong), pairs=pairs).failed()
+    other = list(fixed)
+    other[3] = clean[25]                                                              # a frame that was no ghost changed
+    bad = verify_deghost(src, write(tmp_path / "other.mkv", other), pairs=pairs, frames=40)
+    assert "untouched" in bad.failed()
