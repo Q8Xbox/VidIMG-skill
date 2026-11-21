@@ -23,6 +23,7 @@ After setup the person restarts Claude Code (a cloned project also approves the 
 | Step | Tool | Notes |
 |---|---|---|
 | **Automatic flow (default)** | `survey_media(paths)` → `decide_plan(plan, decisions)` → `run_plan(plan)` → `review_results(plan, reviews)` | For any request: one file, many files, folders, a series, or a mix. See "Automatic flow" below. |
+| The block library | `block_library()`, `add_block(definition)`, `note_block(name, note, proven)` | Every step a recipe can use, the defects each addresses and its record on earlier videos; add a block when a video shows a defect none addresses; note what a comparison showed. |
 | Compare recipes by eye | `try_recipes(plan, item_id, recipes)` | Background job → `job_status`. 2–4 recipes on one video's guarded previews, side by side on one image. Before `decide_plan`, when a look must settle the choice. |
 | Check the setup | `doctor()` | First, if anything fails or on a new machine. |
 | Understand the file | `analyze_media(path)` | Profile + the plan the pipeline will follow. For videos it also returns `frames_sheet`: **look at it** to decide cartoon/anime vs real footage. |
@@ -52,7 +53,31 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    Each video also has `closeups` (one image: line art enlarged without smoothing, the frame with the measured
    picture area outlined, a strip of consecutive frames) and `findings` (defects measured but corrected only on
    your decision).
-2. **Look at every contact sheet and every video's close-ups**, then send your corrections in ONE
+   There are no fixed paths. Each video also comes with `proposed_recipe` (the analysis' starting point),
+   `similar_cases` (earlier videos like it: the recipe they got, what the guard said, how the result was
+   judged) and `history` (this file's own earlier runs); the survey result lists the `blocks` you compose from.
+2. **Compose a recipe for each video.** `decide_plan(plan, {id: {"recipe": {...}, "reason": "..."}})` with
+   `{"faces": "drawn" | "real", "steps": [...], "models": [...], "scale": 1..4 | null, "texture": 0..1 | null}`:
+   - `faces` is what you see on the contact sheet. It sets how the guard judges faces (advisory on drawings,
+     strict on people) and nothing else; it does not limit the models, except that the anime models need
+     `drawn`.
+   - `steps` are blocks, in the order you want them run. Use a step when the close-ups show its defect, at the
+     mildest preset that removes it. `fields` first when the analysis flags interlace, telecine, blends or
+     chroma shift.
+   - `models` in the order to try; `scale` 1 keeps the size (right for a source that is already an enlargement).
+   - Read `similar_cases` before you choose: a recipe that was judged good on a source like this one is the
+     better starting point, and one that was sent back tells you what to avoid.
+   - **Grow the library; do not wait to be asked.** The survey's `defects` list is what a restorer looks for
+     and which blocks address each; a video's `gaps` are defects it was measured to have that no block
+     addresses. Go through the close-ups with that list in mind. When you see a defect with no block (measured
+     or not), write the block from what you know about restoring it: the script a restorer would write
+     (AviSynth with the pinned plugins, or an ffmpeg clean-up chain), honest `what`, `when`, `softens`, and the
+     defect in `addresses` (`add_block`). It starts as a candidate: compare the recipe with and without it
+     using `try_recipes`, look, then `note_block` what you saw and whether it is proven. Use a candidate in a
+     full run only after that comparison. Note what you learn about built-in blocks the same way. Each block's
+     `record` (asked for, kept or dropped by the guard, reviews) is its history on earlier videos: weigh it.
+   The older keys below (`content`, `model`, `filters`, ...) remain as shorthand for simple cases.
+   **Look at every contact sheet and every video's close-ups**, then send your decisions in ONE
    `decide_plan(plan, {...})` call. You are the supervisor here, not a relay for the numbers: they are wrong often
    enough that only a look settles it (a halo score read white eyes beside dark pupils as ringing; a black bar and
    a night scene's edge measure the same). On the close-ups judge, per video:
@@ -86,7 +111,9 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    what you see with `review_results(plan, {id: {verdict, notes}})`: `good`, `acceptable` (name what is not
    ideal) or `redo` (the item goes back to pending: change its decision and run the plan again). The guard has
    already decided the result is faithful; your review is about how it looks (clean lines, backgrounds not turned
-   to smooth blobs, no defect made sharper than in the source). It appears in the report.
+   to smooth blobs, no defect made sharper than in the source). It appears in the report and joins the video's
+   case in the case library, so the next similar video starts from it. When the person tells you what they
+   think of a result, pass their words as `person_verdict` in the same call.
 5. Report per item: delivered or original kept and why, guard warnings, your review, the combined report's path.
    Ask the person to look at the faces. Their visual verdict outranks the numbers and yours.
 

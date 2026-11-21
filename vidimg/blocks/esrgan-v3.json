@@ -1,0 +1,23 @@
+{
+ "name": "esrgan-v3",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "video2x",
+ "needs": [
+  "drawn_faces"
+ ],
+ "what": "Real-ESRGAN anime-v3 (Video2X): clean, even line art; fast",
+ "when": "hand-drawn animation; needs the faces declared drawn (these models reshape real faces); the first choice for cartoons on the owner's samples",
+ "spec": {
+  "processor": "realesrgan",
+  "model": "realesr-animevideov3",
+  "scales": [
+   1,
+   2,
+   3,
+   4
+  ],
+  "label": "anime esrgan-v3"
+ },
+ "version": 1
+}

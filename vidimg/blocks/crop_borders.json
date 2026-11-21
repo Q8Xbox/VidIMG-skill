@@ -1,0 +1,21 @@
+{
+ "name": "crop_borders",
+ "kind": "framing",
+ "engine": "builtin",
+ "runner": "crop",
+ "what": "cuts the measured black bars away (lossless, even edges, pixel shape kept); the frame gets smaller, never stretched",
+ "when": "the analysis measured bars AND everything outside the red outline on the close-up is black",
+ "changes": [
+  "frame_size"
+ ],
+ "tried_on": [
+  "owner cartoon: 640x480 -> 610x476"
+ ],
+ "version": 1,
+ "addresses": [
+  "black_borders"
+ ],
+ "needs": [
+  "source_positions"
+ ]
+}

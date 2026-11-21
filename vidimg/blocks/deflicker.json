@@ -1,0 +1,36 @@
+{
+ "name": "deflicker",
+ "kind": "filter",
+ "engine": "ffmpeg",
+ "addresses": [
+  "brightness_flicker"
+ ],
+ "what": "evens out frame-to-frame brightness pulsing by matching each frame to the average of its neighbours (ffmpeg deflicker)",
+ "when": "the whole picture pulses lighter and darker from frame to frame; not for scenes whose light really changes",
+ "script": [
+  "deflicker=size={size}:mode=am"
+ ],
+ "params": {
+  "size": {
+   "type": "int",
+   "min": 3,
+   "max": 9,
+   "default": 5
+  }
+ },
+ "presets": {
+  "light": {
+   "size": 3
+  },
+  "strong": {
+   "size": 7
+  }
+ },
+ "default_preset": "light",
+ "softens": "real, fast changes of light (lightning, a flash) are damped too",
+ "status": "candidate",
+ "tried_on": [
+  "written from restoration practice; runs and passes the guard on a 15 s cut of an owner cartoon that does not show this defect (safe to try). Whether it helps on a source that has the defect is not shown yet; note: on that clean cut it raised the flicker reading to 0.0175 (limit 0.02)"
+ ],
+ "version": 1
+}

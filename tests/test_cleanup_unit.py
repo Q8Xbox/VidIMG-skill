@@ -161,7 +161,7 @@ def test_filters_are_decided_for_videos_and_series_and_reach_the_pipelines(tmp_p
         with pytest.raises(ValueError):
             auto.decide(tmp_path, bad)
     s = auto.summary(auto.load(tmp_path))
-    assert [g["name"] for g in s["items"][0]["filter_catalogue"]] == list(cleanup.ORDER) and "filter_catalogue" in s["next"]
+    assert {"deblock", "dehalo", "deinterlace_scenes"} <= {b["block"] for b in s["blocks"]} and "blocks" in s["next"]
     seen = {}
 
     def video(src, out, **kw):
@@ -203,3 +203,34 @@ def test_recipes_can_differ_in_their_filters(tmp_path, monkeypatch):
                                        {"name": "dehalo strong", "filters": "dehalo:strong"}], log=lambda m: None)
     assert seen == [[], [{"name": "dehalo", "strength": "light"}], [{"name": "dehalo", "strength": "strong"}]]
     assert [r["name"] for r in plan["items"][0]["trials"]["recipes"]] == ["as it is", "dehalo light", "dehalo strong"]
+
+
+@needs_ffmpeg
+def test_a_moved_picture_passes_only_when_it_is_the_same_picture_and_steadier(tmp_path):
+    import numpy as np
+    from vidimg.guard.video import verify_moved, verify_video
+
+    rng = np.random.default_rng(5)
+    still = (rng.random((30, 40, 3)) * 255).astype(np.uint8)
+    import cv2
+    still = cv2.GaussianBlur(cv2.resize(still, (320, 240), interpolation=cv2.INTER_CUBIC), (0, 0), 2)   # smooth detail
+    # colourless: the frames are shifted before the 4:2:0 encode, and an odd shift would then change how the colour
+    # is sampled (26 dB on saturated random colours), which a stabiliser working on the stored planes does not do
+    still = cv2.cvtColor(cv2.cvtColor(still, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+    shifts = rng.integers(-3, 4, (50, 2))
+
+    def write(path, frames, vf=None):
+        cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s",
+               "320x240", "-r", "25", "-i", "-", *(["-vf", vf] if vf else []), "-c:v", "ffv1", "-pix_fmt", "yuv420p", str(path)]
+        subprocess.run(cmd, input=b"".join(f.tobytes() for f in frames), check=True, capture_output=True)
+        return path
+
+    shaky = write(tmp_path / "shaky.mkv", [np.roll(still, (int(dy), int(dx)), axis=(0, 1)) for dx, dy in shifts])
+    steady = write(tmp_path / "steady.mkv", [still] * 50)
+    rep = verify_moved(shaky, steady, max_shift=4)
+    assert rep.passed, [(g.name, g.value, g.detail) for g in rep.gates if g.status == "fail"]
+    assert "shift" in verify_moved(shaky, steady, max_shift=1).failed()                # moved further than allowed
+    assert verify_moved(shaky, shaky, max_shift=4).failed() == ["steadier"]            # nothing gained
+    soft = write(tmp_path / "soft.mkv", [still] * 50, vf="gblur=sigma=2")
+    assert "picture" in verify_moved(shaky, soft, max_shift=4).failed()                # steadier, but not the same picture
+    assert not verify_video(shaky, steady).passed                                      # why this needed its own check

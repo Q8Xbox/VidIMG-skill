@@ -101,9 +101,10 @@ class AnimeSR:
     processor: str = "realesrgan"
     model: str = "realesr-animevideov3"
     scale: int = 2
+    same_size: bool = False                # enlarge, then scale back to the input's size (clean-up at its own size)
 
     def describe(self) -> str:
-        return f"video2x:{self.processor}:{self.model}:x{self.scale}"
+        return f"video2x:{self.processor}:{self.model}:x{self.scale}" + (":same-size" if self.same_size else "")
 
 
 ENCODER_TO_CODEC = {"ffv1": ("ffv1", None, {}),
@@ -120,8 +121,41 @@ NVENC_CODEC = {"hevc10": ("hevc_nvenc", "p010le", {"preset": "p7", "tune": "hq",
                "h264": ("h264_nvenc", "yuv420p", {"preset": "p7", "tune": "hq", "rc": "constqp", "qp": "16"})}
 
 
+FIT_FILTER = "bicubic"          # the scale back to the input's size
+
+
+def _run_same_size(src: Path, dst: Path, st: AnimeSR, encoder: str) -> AdapterResult:
+    """The anime models only enlarge (x2 and up). For a cartoon that is to keep its size, the model runs at x2 and
+    the result is scaled back: the lines come back cleaned and redrawn at the original size. The enlarged
+    intermediate is a normal encode, not a lossless one: at half size its loss is far below one level."""
+    import subprocess
+    from dataclasses import replace
+
+    from .. import media
+    info = media.probe(src)
+    w, h = info["width"] // 2 * 2, info["height"] // 2 * 2
+    big = dst.with_name(dst.stem + ".enlarged" + dst.suffix)
+    r = run_stage(src, big, replace(st, same_size=False), "hevc10")
+    if not r.ok:
+        big.unlink(missing_ok=True)
+        return r
+    cp = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(big),
+                         "-map", "0:v:0", "-map", "0:a?", "-c:a", "copy", "-map_metadata", "0",
+                         "-vf", f"scale={w}:{h}:flags={FIT_FILTER}", "-fps_mode", "passthrough",
+                         *media.encoder_args(encoder), str(dst)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    big.unlink(missing_ok=True)
+    if cp.returncode != 0 or not dst.exists():
+        return AdapterResult(False, error="scaling back to the input's size failed: " + cp.stderr.strip()[-300:],
+                             run=r.run, details=r.details)
+    r.details = {**(r.details or {}), "same_size": f"{st.scale}x, then scaled back to {w}x{h} ({FIT_FILTER})"}
+    return r
+
+
 def run_stage(src: Path, dst: Path, st: AnimeSR, encoder: str = "hevc10", **_) -> AdapterResult:
     from .. import media
+    if st.same_size:
+        return _run_same_size(src, dst, st, encoder)
     codec, pix, extra = (NVENC_CODEC[encoder] if encoder in NVENC_CODEC and media.nvenc()
                          else ENCODER_TO_CODEC.get(encoder, ENCODER_TO_CODEC["hevc10"]))
     feed, tmp = _timestamp_safe_input(src, dst)

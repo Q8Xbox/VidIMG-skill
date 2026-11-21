@@ -1,0 +1,39 @@
+{
+ "name": "chroma_denoise",
+ "kind": "filter",
+ "engine": "avisynth",
+ "addresses": [
+  "chroma_noise"
+ ],
+ "what": "non-local-means clean-up of the colour planes only (KNLMeansCL on the GPU); the luma, and with it every line, is untouched",
+ "when": "flat areas show blotchy, crawling colour while the lines themselves are steady (tape chroma noise)",
+ "script": [
+  "KNLMeansCL(d=1, a=2, h={h}, channels=\"UV\", device_type=\"gpu\")"
+ ],
+ "params": {
+  "h": {
+   "type": "float",
+   "min": 0.4,
+   "max": 4.0,
+   "default": 1.0
+  }
+ },
+ "presets": {
+  "light": {
+   "h": 0.8
+  },
+  "medium": {
+   "h": 1.5
+  },
+  "strong": {
+   "h": 2.5
+  }
+ },
+ "default_preset": "light",
+ "softens": "small colour details (a thin coloured line can fade at strong)",
+ "status": "candidate",
+ "tried_on": [
+  "written from restoration practice; runs and passes the guard on a 15 s cut of an owner cartoon that does not show this defect (safe to try). Whether it helps on a source that has the defect is not shown yet"
+ ],
+ "version": 1
+}

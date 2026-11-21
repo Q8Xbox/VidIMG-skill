@@ -28,6 +28,10 @@ def _inheriting_calls():
             captured = "capture_output" in given or n.func.attr == "check_output"
             if not (captured or "stdout" in given) or not (captured or "stderr" in given):
                 found.append(f"{f.relative_to(ROOT)}:{n.lineno}")
+            # the input stream too: an inherited one failed the same way in Windows' handle duplication
+            # ([WinError 50] / [WinError 6], intermittently, seen under the test runner 2026-11-21)
+            elif f.name != "texture.py" and not {"stdin", "input"} & given:
+                found.append(f"{f.relative_to(ROOT)}:{n.lineno} (stdin)")
     return found
 
 

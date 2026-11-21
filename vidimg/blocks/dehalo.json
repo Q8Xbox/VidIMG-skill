@@ -1,0 +1,53 @@
+{
+ "name": "dehalo",
+ "kind": "filter",
+ "engine": "avisynth",
+ "what": "pulls back the light halo that old edge enhancement left beside dark lines (DeHalo_alpha); the lines keep their weight",
+ "when": "the line close-ups show a bright rim running along dark lines on flat colour (not a drawn highlight, not white beside black by design); there is no measurement for halos, only a look",
+ "script": [
+  "DeHalo_alpha(rx={radius}, ry={radius}, darkstr={dark}, brightstr={bright})"
+ ],
+ "params": {
+  "radius": {
+   "type": "float",
+   "min": 1.0,
+   "max": 3.0,
+   "default": 2.0
+  },
+  "bright": {
+   "type": "float",
+   "min": 0.0,
+   "max": 1.0,
+   "default": 0.8
+  },
+  "dark": {
+   "type": "float",
+   "min": 0.0,
+   "max": 1.0,
+   "default": 0.2
+  }
+ },
+ "presets": {
+  "light": {
+   "bright": 0.6,
+   "dark": 0.0
+  },
+  "medium": {
+   "bright": 0.8,
+   "dark": 0.2
+  },
+  "strong": {
+   "bright": 1.0,
+   "dark": 0.4
+  }
+ },
+ "default_preset": "medium",
+ "softens": "the area right beside lines",
+ "tried_on": [
+  "owner cartoon cut with halos around trees: halos shrink as strength rises"
+ ],
+ "version": 1,
+ "addresses": [
+  "halos"
+ ]
+}

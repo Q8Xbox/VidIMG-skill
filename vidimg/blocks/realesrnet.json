@@ -1,0 +1,13 @@
+{
+ "name": "realesrnet",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "free",
+ "what": "RealESRNet (open, non-GAN): the most faithful to real faces; soft; slow (about 0.5 fps at 720p)",
+ "when": "real footage with faces when the run fits the time the person accepts",
+ "spec": {
+  "model": "realesrnet_x4",
+  "label": "free realesrnet"
+ },
+ "version": 1
+}

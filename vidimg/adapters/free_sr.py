@@ -38,7 +38,7 @@ def _torch_cuda() -> bool:
     if _CUDA is None:
         try:
             r = subprocess.run([str(PYTHON), "-I", "-c", "import torch; print(torch.cuda.is_available())"],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, stdin=subprocess.DEVNULL)
             _CUDA = r.returncode == 0 and r.stdout.strip().endswith("True")
         except (OSError, subprocess.TimeoutExpired):
             _CUDA = False

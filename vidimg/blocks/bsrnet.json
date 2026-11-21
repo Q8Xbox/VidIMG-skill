@@ -1,0 +1,13 @@
+{
+ "name": "bsrnet",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "free",
+ "what": "BSRNet (open, non-GAN): faithful, soft; slow",
+ "when": "real footage; second to RealESRNet",
+ "spec": {
+  "model": "bsrnet_x4",
+  "label": "free bsrnet"
+ },
+ "version": 1
+}

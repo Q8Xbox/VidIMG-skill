@@ -1,0 +1,393 @@
+"""No fixed paths: the block library (steps as data), recipes composed from it, the pipeline running a recipe in
+the order it was written, and the case library that every run adds to."""
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from vidimg import auto, cases, library, recipe
+from vidimg import pipeline_video as pv
+from vidimg.adapters import avisynth as avs
+from vidimg.adapters import free_sr, video2x
+
+NEW = {"name": "grain_calm", "kind": "filter", "engine": "avisynth",
+       "what": "calms heavy film grain", "when": "the close-ups show coarse dancing grain",
+       "script": ["SMDegrain(tr={tr}, thSAD={thsad}, contrasharp=false)"],
+       "params": {"tr": {"type": "int", "min": 1, "max": 4, "default": 2},
+                  "thsad": {"type": "int", "min": 100, "max": 600, "default": 250}},
+       "presets": {"light": {"thsad": 150}, "strong": {"tr": 3, "thsad": 400}}, "default_preset": "light"}
+
+
+# ----------------------------------------------------------------------------- the library
+def test_every_built_in_block_is_valid_and_the_library_names_what_a_recipe_needs():
+    blocks, problems = library.load(Path("no/such/folder"))
+    assert problems == []
+    kinds = {b.name: b.kind for b in blocks.values()}
+    assert {"fields", "deinterlace_scenes", "remove_repeats", "crop_borders", "deblock", "dehalo", "esrgan-v3",
+            "cugan", "cugan-pro", "general-v3", "realesrnet", "bsrnet", "texture"} <= set(kinds)
+    assert set(pv.STEP_RUNNERS) == {b.runner for b in blocks.values() if not b.scripted and b.kind in ("field", "framing")}
+    for b in blocks.values():
+        assert b.what and b.when and b.origin == "built-in"
+        if b.kind == "model":                                   # a model block carries what its engine is given
+            assert b.spec.get("label") and b.spec.get("model")
+    rows = library.guide(blocks)
+    assert [r["kind"] for r in rows] == sorted((r["kind"] for r in rows), key=library.KINDS.index)
+    assert next(r for r in rows if r["block"] == "deblock")["presets"] == ["light", "medium", "strong"]
+
+
+def test_a_tool_is_added_as_a_file_and_bounded_by_what_makes_it_safe(tmp_path):
+    path = library.save_local(NEW, tmp_path)
+    blocks, problems = library.load(tmp_path)
+    b = blocks["grain_calm"]
+    assert path.exists() and problems == [] and b.origin == "local" and b.scripted
+    assert library.render(b, library.resolve(b)) == ["SMDegrain(tr=2, thSAD=150, contrasharp=false)"]
+    assert library.resolve(b, "strong", {"tr": 4}) == {"tr": 4, "thsad": 400}
+    for preset, settings in (("extreme", None), (None, {"tr": 9}), (None, {"nope": 1}), (None, {"tr": "2"})):
+        with pytest.raises(ValueError):
+            library.resolve(b, preset, settings)
+    with pytest.raises(ValueError):                              # the name is taken now
+        library.save_local(NEW, tmp_path)
+    with pytest.raises(ValueError):                              # and a built-in name cannot be replaced
+        library.save_local({**NEW, "name": "deblock"}, tmp_path)
+    bad = [
+        {**NEW, "name": "Bad Name"},
+        {**NEW, "name": "a1", "script": ["LSFmod(strength=80)"], "params": {}, "presets": {}, "default_preset": None},
+        {**NEW, "name": "a2", "script": ['LoadPlugin("x.dll")'], "params": {}, "presets": {}, "default_preset": None},
+        {**NEW, "name": "a3", "script": ["Spline36Resize(1920, 1080)"], "params": {}, "presets": {}, "default_preset": None},
+        {**NEW, "name": "a4", "script": ["Trim(0, 100)"], "params": {}, "presets": {}, "default_preset": None},
+        {**NEW, "name": "a5", "script": ["SMDegrain(tr={missing})"]},
+        {**NEW, "name": "a6", "kind": "framing"},
+        {**NEW, "name": "a7", "changes": ["frame_size"]},
+        {**NEW, "name": "a8", "engine": "builtin", "runner": "fields"},      # code runners are not addable
+        {**NEW, "name": "a9", "check": "none"},                              # nor is a check of its own
+        {**NEW, "name": "b1", "engine": "ffmpeg", "script": ["unsharp=5:5:1.0"], "params": {}, "presets": {}, "default_preset": None},
+        {**NEW, "name": "b2", "engine": "ffmpeg", "script": ["movie=other.mkv"], "params": {}, "presets": {}, "default_preset": None},
+        {**NEW, "name": "b3", "params": {"tr": {"type": "int", "default": 2}}},
+        {**NEW, "name": "b4", "what": ""},
+    ]
+    for d in bad:
+        with pytest.raises(ValueError):
+            library.validate(d)
+    ok = library.validate({"name": "soft_denoise", "kind": "filter", "engine": "ffmpeg", "what": "w", "when": "w",
+                           "script": ["hqdn3d={luma}:{luma}:3:3"],
+                           "params": {"luma": {"type": "float", "min": 0, "max": 6, "default": 1.5}}})
+    assert library.render(ok, library.resolve(ok)) == ["hqdn3d=1.5:1.5:3:3"]
+    (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
+    assert any("broken.json" in p for p in library.load(tmp_path)[1])       # a bad file is reported, the rest loads
+
+
+# ----------------------------------------------------------------------------- recipes
+def test_a_recipe_is_free_in_its_order_and_refused_only_where_it_cannot_work():
+    got, advice = recipe.validate({"faces": "drawn", "steps": ["fields", "deinterlace_scenes", "dehalo:light",
+                                                               {"block": "deblock", "settings": {"quant1": 20}},
+                                                               "crop_borders"],
+                                   "models": ["cugan", "general-v3"], "scale": 1, "texture": 0.5})
+    assert [s["block"] for s in got["steps"]] == ["fields", "deinterlace_scenes", "dehalo", "deblock", "crop_borders"]
+    assert got["steps"][3]["settings"] == {"quant1": 20, "quant2": 26} and got["steps"][2]["preset"] == "light"
+    assert got["models"] == ["cugan", "general-v3"] and got["scale"] == 1 and got["texture"] == 0.5
+    assert any("untouched pixel grid" in a for a in advice)              # deblock after dehalo: advice, not refusal
+    assert recipe.validate({"faces": "real", "steps": [], "models": ["realesrnet"]})[1] == []
+    # a faithful model on a drawing, and the compact model first at the source's own size: nothing forbids it
+    assert recipe.validate({"faces": "drawn", "models": ["realesrnet", "esrgan-v3"], "scale": 1})[0]["models"] == ["realesrnet", "esrgan-v3"]
+    for bad in ({"steps": []}, {"faces": "cartoon"}, {"faces": "drawn", "steps": ["sharpen"]},
+                {"faces": "drawn", "steps": ["deblock", "deblock"]}, {"faces": "drawn", "steps": ["esrgan-v3"]},
+                {"faces": "drawn", "steps": ["remove_repeats", "deinterlace_scenes"]},   # frame numbers already changed
+                {"faces": "real", "models": ["esrgan-v3"]},                               # anime model, real faces
+                {"faces": "drawn", "models": ["gfpgan"]}, {"faces": "drawn", "scale": 9},
+                {"faces": "drawn", "texture": 2}, {"faces": "drawn", "path": "anime"},
+                {"faces": "drawn", "steps": ["crop_borders:light"]}, {"faces": "drawn", "steps": ["deblock:max"]},
+                {"faces": "drawn", "models": ["cugan", "cugan"]}, {"faces": "drawn", "models": ["cugan"], "scale": 1.5}):
+        with pytest.raises(ValueError):
+            recipe.validate(bad)
+    assert "steps: fields, then deinterlace_scenes, then dehalo (light)" in recipe.describe(got) and "own size" in recipe.describe(got)
+
+
+def test_the_older_settings_read_as_a_recipe():
+    r = recipe.from_decision({"content": "anime", "model": "cugan", "scale": 2, "filters": ["dehalo:light", "deinterlace_scenes", "deblock"],
+                              "remove_repeats": True, "crop_borders": True, "mask_tape_noise": True, "texture": 0.4},
+                             ["blended", "head_switching"])
+    got, advice = recipe.validate(r)
+    assert [s["block"] for s in got["steps"]] == ["fields", "deinterlace_scenes", "remove_repeats", "deblock", "dehalo", "crop_borders"]
+    assert got["steps"][0]["settings"] == {"mask_tape_noise": True} and got["faces"] == "drawn" and advice == []
+    assert got["models"] == ["cugan"] and got["texture"] == 0.4
+    auto_real = recipe.from_decision({"content": "auto", "model": "esrgan-v3"}, ["sd"])
+    assert auto_real["faces"] == "real" and auto_real["models"] == [] and auto_real["steps"] == []
+    assert recipe.from_decision({"content": "auto"}, ["anime_like"])["faces"] == "drawn"
+
+
+def _prof(height=480, flags=(), frames=1000, width=640):
+    return SimpleNamespace(height=height, width=width, flags=list(flags), frames=frames, duration=40.0, fps=25.0,
+                           faces_max=0)
+
+
+def test_any_model_at_any_size_and_the_usual_order_follows_unless_strict():
+    blocks = library.load(Path("no/such"))[0]
+
+    def cands(rcp, **kw):
+        why, c = pv.recipe_candidates(_prof(**kw), recipe.validate(rcp, blocks)[0], blocks)
+        return why, [(label, make()[0]) for label, make in c]
+
+    why, c = cands({"faces": "drawn"})                                     # nothing named: what the samples support
+    assert [x[0] for x in c] == ["anime esrgan-v3", "anime cugan", "free general-v3"] and c[0][1].scale == 2
+    assert not c[0][1].same_size and c[2][1].height == 960
+    why, c = cands({"faces": "drawn"}, height=1080, width=1440)            # a large drawing keeps its size
+    assert all(x[1].same_size for x in c[:2]) and c[2][1].height == 1080 and why.startswith("own size (1440x1080)")
+    why, c = cands({"faces": "drawn", "models": ["general-v3", "cugan-pro"], "scale": 1})
+    assert [x[0] for x in c] == ["free general-v3", "anime cugan-pro", "anime esrgan-v3", "anime cugan"]
+    assert isinstance(c[0][1], free_sr.FreeSR) and c[0][1].height == 480 and c[1][1].same_size
+    why, c = cands({"faces": "drawn", "models": ["realesrnet"], "model_strict": True, "scale": 2})
+    assert [x[0] for x in c] == ["free realesrnet"] and c[0][1].height == 960 and "only" in why
+    why, c = cands({"faces": "real"})
+    assert [x[0] for x in c] == ["free realesrnet", "free bsrnet", "free general-v3"]
+    why, c = cands({"faces": "real"}, frames=200000, height=1080, width=1920)
+    assert [x[0] for x in c] == ["free general-v3"] and c[0][1].height == 1080
+    why, c = cands({"faces": "drawn", "scale": 3})
+    assert isinstance(c[0][1], video2x.AnimeSR) and c[0][1].scale == 3
+
+
+def test_steps_run_in_the_recipes_order_and_scripted_neighbours_share_a_pass(monkeypatch, tmp_path):
+    blocks = library.load(Path("no/such"))[0]
+    ran = []
+
+    def scripted(base, work, group, index, log=print, drawn=False):
+        ran.append(("pass", [b.name for b, _ in group], [v for _, v in group], drawn))
+        return Path(f"{base}+{index}"), {"said": "+".join(b.name for b, _ in group)}
+
+    monkeypatch.setattr(pv, "run_scripted", scripted)
+    monkeypatch.setitem(pv.STEP_RUNNERS, "crop", lambda c, s: ran.append(("crop", str(c["base"]))) or True)
+    monkeypatch.setitem(pv.STEP_RUNNERS, "fields", lambda c, s: ran.append(("fields", s)) or True)
+    rcp = recipe.validate({"faces": "drawn", "steps": [{"block": "fields", "settings": {"mask_tape_noise": True}},
+                                                       "dehalo:light", "deblock:strong", "crop_borders", "dehalo2"]},
+                          blocks | {"dehalo2": library.validate({**NEW, "name": "dehalo2"})})[0]
+    rec = SimpleNamespace(prepass={}, notes=[])
+    ctx = {"base": Path("src"), "shape_ref": Path("src"), "work": tmp_path, "prof": None, "rec": rec,
+           "log": lambda m: None, "drawn": True}
+    assert pv.run_steps(ctx, rcp["steps"], blocks | {"dehalo2": library.validate({**NEW, "name": "dehalo2"})})
+    assert [r[0] for r in ran] == ["fields", "pass", "crop", "pass"]
+    assert ran[0][1] == {"mask_tape_noise": True}
+    assert ran[1][1] == ["dehalo", "deblock"] and ran[1][2][1] == {"quant1": 30, "quant2": 34} and ran[1][3] is True
+    assert ran[2][1] == "src+1" and ran[3][1] == ["dehalo2"] and str(ctx["base"]) == "src+1+2"
+    assert set(rec.prepass) == {"pass1", "pass2"} and len(rec.notes) == 2
+    # failed field handling stops the run; a failed filter does not
+    monkeypatch.setitem(pv.STEP_RUNNERS, "fields", lambda c, s: False)
+    assert pv.run_steps(dict(ctx), rcp["steps"], blocks | {"dehalo2": library.validate({**NEW, "name": "dehalo2"})}) is False
+    monkeypatch.setattr(pv, "run_scripted", lambda *a, **k: (None, {"said": "dehalo", "skipped": "guard"}))
+    rec2 = SimpleNamespace(prepass={}, notes=[])
+    c2 = dict(ctx, rec=rec2, base=Path("src"))
+    assert pv.run_steps(c2, [{"block": "dehalo", "settings": {}}], blocks) and c2["base"] == Path("src")
+    assert "not applied" in rec2.notes[0]
+
+
+def test_a_library_script_passes_the_same_lint_as_any_stage():
+    from fractions import Fraction
+    blocks = library.load(Path("no/such"))[0]
+    stages = [avs.Lines(library.render(blocks[n], library.resolve(blocks[n], "light")), n) for n in ("dehalo", "deblock")]
+    text = avs.Script(Path("C:/in/a.mkv"), stages, Path("C:/work/a.lwi"), Fraction(25)).text()
+    assert avs.lint(text) == []
+    assert text.index("DeHalo_alpha(rx=2, ry=2, darkstr=0, brightstr=0.6)") < text.index("Deblock_QED(quant1=18, quant2=20)")
+
+
+# ----------------------------------------------------------------------------- the case library
+def _profile(flags, height=480, bpp=0.05, blend=0.0):
+    return {"flags": flags, "width": 640, "height": height, "fps": 25.0, "codec": "h264", "bits_per_pixel": bpp,
+            "blockiness": 1.4, "blend_share": blend, "anime_score": 0.5, "noise_sigma": 0.3}
+
+
+def test_every_run_leaves_a_case_and_similar_sources_find_it(tmp_path):
+    r1 = recipe.validate({"faces": "drawn", "steps": ["fields"], "models": ["esrgan-v3"], "scale": 1})[0]
+    r2 = recipe.validate({"faces": "drawn", "steps": ["fields"], "models": ["general-v3"], "scale": 1})[0]
+    gates = {"vmaf": {"status": "pass", "value": 98.0}, "texture": {"status": "warn", "value": 0.09}}
+    cases.record("C:/v/old upscale.mkv", _profile(["blended", "compressed"], 1080, 0.02, 0.38), r1,
+                 {"delivered": "x.mp4", "chosen": "anime esrgan-v3", "final_gates": gates, "notes": ["ok"]}, tmp_path)
+    cases.record("C:/v/old upscale.mkv", _profile(["blended", "compressed"], 1080, 0.02, 0.38), r2,
+                 {"delivered": None, "chosen": "free general-v3", "final_gates": {"color": {"status": "fail", "value": 4.5}}}, tmp_path)
+    cases.record("C:/v/clean dvd.mkv", _profile(["sd"]), r1, {"delivered": "y.mp4", "chosen": "anime esrgan-v3", "final_gates": gates}, tmp_path)
+    assert len(list(tmp_path.glob("*.json"))) == 3                       # one per file and recipe
+    assert cases.annotate("C:/v/old upscale.mkv", r1, review={"verdict": "good", "notes": "clean lines", "by": "claude"},
+                          verdict="looks right to me", where=tmp_path)
+    assert not cases.annotate("C:/v/unknown.mkv", r1, verdict="x", where=tmp_path)
+    near = cases.similar(_profile(["blended", "compressed"], 1080, 0.025, 0.4), 2, tmp_path)
+    assert [c["source"] for c in near] == ["old upscale.mkv", "old upscale.mkv"] and near[0]["distance"] < 0.5
+    told = {c["model"]: c for c in near}
+    assert told["anime esrgan-v3"]["review"]["verdict"] == "good" and told["anime esrgan-v3"]["verdict"] == "looks right to me"
+    assert told["free general-v3"]["delivered"] is False and told["free general-v3"]["gates"]["failed"] == ["color"]
+    assert cases.similar(_profile(["sd"]), 1, tmp_path)[0]["source"] == "clean dvd.mkv"
+    # the file's own runs are its history, not its neighbours
+    assert cases.similar(_profile(["blended", "compressed"], 1080), 3, tmp_path, exclude_source="C:/v/old upscale.mkv")[0]["source"] == "clean dvd.mkv"
+    assert len(cases.history("C:/v/old upscale.mkv", tmp_path)) == 2 and cases.history("C:/v/none.mkv", tmp_path) == []
+    assert cases.similar(_profile([]), 3, tmp_path / "empty") == []
+    assert "frames" not in json.dumps(json.loads(next(tmp_path.glob("*.json")).read_text(encoding="utf-8"))["signature"])
+
+
+# ----------------------------------------------------------------------------- through the automatic flow
+def test_a_recipe_is_decided_run_recorded_and_reviewed(tmp_path, monkeypatch):
+    from vidimg import pipeline_video
+
+    monkeypatch.setattr(cases, "folder", lambda: tmp_path / "cases")
+    plan = {"version": 1, "created": "now", "out": str(tmp_path), "inputs": [], "ignored_files": 0, "contact_sheets": [],
+            "items": [{"id": "v1", "type": "video", "source": "C:/in/clip.mp4", "guide": {}, "decided_by": "analysis",
+                       "reasons": [], "state": "pending",
+                       "decision": {"content": "auto", "model": "general-v3", "scale": None, "recipe": None}}]}
+    auto.save(plan)
+    s = auto.summary(auto.load(tmp_path))
+    assert {"fields", "texture", "esrgan-v3"} <= {b["block"] for b in s["blocks"]} and "recipe" in s["next"]
+    with pytest.raises(ValueError):
+        auto.decide(tmp_path, {"v1": {"recipe": {"faces": "real", "models": ["cugan"]}}})
+    plan = auto.decide(tmp_path, {"v1": {"recipe": {"faces": "drawn", "steps": ["dehalo", "deblock:light"],
+                                                    "models": ["esrgan-v3"], "scale": 1}, "reason": "an old enlargement"}})
+    it = plan["items"][0]
+    assert it["decision"]["recipe"]["steps"][0] == {"block": "dehalo", "settings": {"radius": 2.0, "bright": 0.8, "dark": 0.2}}
+    assert any("untouched pixel grid" in r for r in it["reasons"])
+    seen = {}
+
+    def video(src, out, **kw):
+        seen.update(kw)
+        d = {"chosen": "anime esrgan-v3", "delivered": "x_restored.mp4", "passed": True, "notes": ["done"],
+             "final_gates": {"vmaf": {"status": "pass", "value": 99.0}}, "sheets": [], "recipe": kw["recipe"],
+             "profile": _profile(["compressed"], 1080)}
+        return SimpleNamespace(to_dict=lambda: d)
+
+    monkeypatch.setattr(pipeline_video, "restore_video", video)
+    monkeypatch.setattr("vidimg.report.compare.video_page", lambda r, p: p)
+    plan = auto.run(tmp_path, log=lambda m: None)
+    assert seen["recipe"] == it["decision"]["recipe"] and plan["items"][0]["recipe_used"] == seen["recipe"]
+    assert "recipe: faces drawn; steps: dehalo, then deblock (light)" in Path(plan["report"]).read_text(encoding="utf-8")
+    assert len(list((tmp_path / "cases").glob("*.json"))) == 1
+    auto.review(tmp_path, {"v1": {"verdict": "good", "notes": "lines clean", "person_verdict": "much better"}})
+    case = json.loads(next((tmp_path / "cases").glob("*.json")).read_text(encoding="utf-8"))
+    assert case["review"]["verdict"] == "good" and case["verdict"] == "much better" and case["outcome"]["delivered"]
+    # the next survey of a similar source is told about it
+    assert cases.similar(_profile(["compressed"], 1080))[0]["review"]["notes"] == "lines clean"
+
+
+# ----------------------------------------------------------------------------- the library grows
+def test_a_block_written_from_knowledge_is_a_candidate_until_a_trial_proves_it(tmp_path):
+    library.save_local({**NEW, "addresses": ["noise"], "status": "proven"}, tmp_path)   # it cannot declare itself proven
+    b = library.load(tmp_path)[0]["grain_calm"]
+    assert b.status == "candidate"
+    blocks = library.load(tmp_path)[0]
+    got, advice = recipe.validate({"faces": "real", "steps": ["grain_calm", "dehalo"]}, blocks)
+    assert [a for a in advice if "grain_calm is a candidate" in a and "try_recipes" in a] and len(advice) == 1
+    row = next(r for r in library.guide(blocks) if r["block"] == "grain_calm")
+    assert row["status"].startswith("candidate") and row["addresses"] == ["noise"] and row["origin"] == "local"
+    b = library.note("grain_calm", "8 mm film, light:  speckle calmer, faces keep their texture", True, tmp_path)
+    assert b.status == "proven" and b.tried_on == ["8 mm film, light: speckle calmer, faces keep their texture"]
+    assert recipe.validate({"faces": "real", "steps": ["grain_calm"]}, library.load(tmp_path)[0])[1] == []
+    b = library.note("grain_calm", "cartoon: it flattened the painted backgrounds", False, tmp_path)
+    assert b.status == "candidate" and len(b.tried_on) == 2
+    # what is learnt about a built-in block is kept too, locally
+    d = library.note("dehalo", "DVD cartoon, strong: thin lines lost weight", None, tmp_path)
+    assert d.origin == "built-in" and d.status == "proven" and d.tried_on[-1].startswith("DVD cartoon")
+    for bad in (("nope", "x", None), ("dehalo", "   ", None)):
+        with pytest.raises(ValueError):
+            library.note(*bad, tmp_path)
+    assert not any("_notes" in p for p in library.load(tmp_path)[1])       # the notes file is not read as a block
+
+
+def test_gaps_name_measured_defects_no_block_addresses(tmp_path):
+    blocks = library.load(tmp_path)[0]
+    cover = {r["defect"]: r for r in library.coverage(blocks)}
+    assert cover["halos"]["blocks"] == ["dehalo"] and cover["halos"]["measured_by"] is None
+    assert cover["blended"]["blocks"] == ["fields"] and cover["noise"]["blocks"] == ["degrain"]
+    assert cover["spots"]["blocks"] == ["despot"] and cover["jitter"]["blocks"] == ["stabilise"]
+    assert cover["top_flagging"]["repairable"] is False
+    assert library.gaps(["noisy", "blended", "top_flagging"], blocks) == []          # addressed, or beyond repair
+    # without the noise block the library has a gap, and the video that shows it is told so
+    bare = {k: v for k, v in blocks.items() if k != "degrain"}
+    gap = library.gaps(["noisy", "sd"], bare)
+    assert [g["defect"] for g in gap] == ["noise"] and "add_block" in gap[0]["hint"]
+    # a new block may name a defect nobody listed yet
+    library.save_local({**NEW, "name": "moire_calm", "addresses": ["moire"]}, tmp_path)
+    assert {r["defect"]: r["blocks"] for r in library.coverage(library.load(tmp_path)[0])}["moire"] == ["moire_calm"]
+    # the seeded candidates say so
+    assert {n for n, b in blocks.items() if b.status == "candidate"} == {"degrain", "chroma_denoise", "residual_combing",
+                                                                        "deband", "deflicker", "despot",
+                                                                        "derainbow", "dedotcrawl", "antialias", "stabilise"}
+    assert not [r["defect"] for r in library.coverage(blocks) if not r["blocks"] and r.get("repairable", True)]
+    # a motion-compensated temporal filter weaves neighbours around each frame and picks the middle one back out
+    assert any("SelectEvery(3, 1)" in ln for ln in blocks["despot"].script)
+    with pytest.raises(ValueError):
+        library.validate({**NEW, "name": "halve", "script": ["SelectEven()"], "params": {}, "presets": {}, "default_preset": None})
+    assert all("not shown yet" in blocks[n].tried_on[0] for n in ("degrain", "deband"))
+
+
+def test_each_block_carries_its_record_from_the_cases(tmp_path):
+    rcp = recipe.validate({"faces": "drawn", "steps": ["fields", "dehalo:light", "deblock", "crop_borders"], "scale": 2})[0]
+    result = {"delivered": "x.mp4", "chosen": "anime esrgan-v3", "final_gates": {},
+              "prepass": {"guard_passed": True, "pass1": {"blocks": ["dehalo", "deblock"], "guard_passed": False},
+                          "crop": {"guard_passed": True}}}
+    cases.record("C:/v/a.mkv", _profile(["blended"]), rcp, result, tmp_path)
+    cases.annotate("C:/v/a.mkv", rcp, review={"verdict": "acceptable", "notes": "n", "by": "claude"}, where=tmp_path)
+    rcp2 = recipe.validate({"faces": "drawn", "steps": ["dehalo:strong"], "scale": 2})[0]
+    cases.record("C:/v/b.mkv", _profile(["sd"]), rcp2, {"delivered": None, "final_gates": {},
+                                                         "prepass": {"pass1": {"blocks": ["dehalo"], "guard_passed": True}}}, tmp_path)
+    rec = cases.track_record(tmp_path)
+    assert rec["dehalo"] == {"asked": 2, "kept_by_guard": 1, "dropped_by_guard": 1, "delivered": 1, "reviews": {"acceptable": 1}}
+    assert rec["fields"]["kept_by_guard"] == 1 and rec["crop_borders"]["kept_by_guard"] == 1 and rec["deblock"]["dropped_by_guard"] == 1
+    # a progressive, blended source: un-blending is the field step that ran, and it counts
+    only = recipe.validate({"faces": "drawn", "steps": ["fields"], "scale": 1})[0]
+    cases.record("C:/v/c.mkv", _profile(["blended"]), only, {"delivered": "c.mp4", "final_gates": {},
+                                                             "prepass": {"plan": "x", "deblend": {"guard_passed": True}}}, tmp_path)
+    assert cases.track_record(tmp_path)["fields"]["kept_by_guard"] == 2
+    row = next(r for r in library.guide(record=rec) if r["block"] == "dehalo")
+    assert row["record"]["asked"] == 2 and cases.track_record(tmp_path / "none") == {}
+    steps = json.loads(next(tmp_path.glob("*.json")).read_text(encoding="utf-8"))["outcome"]["steps"]
+    assert {s["block"] for s in steps} <= {"fields", "dehalo", "deblock", "crop_borders"}
+
+
+# ----------------------------------------------------------------------------- a step that moves the picture
+def test_only_a_shipped_block_may_name_a_check_and_a_moved_picture_orders_the_recipe(tmp_path):
+    blocks = library.load(tmp_path)[0]
+    st = blocks["stabilise"]
+    assert st.check == "moved" and st.changes == ["frame_position"] and "jitter" in st.addresses and st.status == "candidate"
+    assert "judged_by" in next(r for r in library.guide(blocks) if r["block"] == "stabilise")
+    assert {r["defect"]: r["blocks"] for r in library.coverage(blocks)}["jitter"] == ["stabilise"]
+    mover = {**NEW, "name": "mover", "check": "moved", "changes": ["frame_position"],
+             "params": {**NEW["params"], "shift": {"type": "int", "min": 1, "max": 8, "default": 4}}}
+    with pytest.raises(ValueError):
+        library.validate(mover)                                  # a local block cannot choose its check ...
+    with pytest.raises(ValueError):
+        library.save_local(mover, tmp_path)
+    assert library.validate(mover, "built-in").check == "moved"  # ... a shipped one may, from the code's list
+    for bad in ({**mover, "check": "lenient"}, {**mover, "changes": []}, {**mover, "changes": ["frame_size"]},
+                {**mover, "params": NEW["params"]}):             # the furthest move must be declared
+        with pytest.raises(ValueError):
+            library.validate(bad, "built-in")
+    with pytest.raises(ValueError):                              # nor may an ordinary block move the picture
+        library.validate({**NEW, "name": "sly", "changes": ["frame_position"]}, "built-in")
+    # the bars were measured where they are in the source: crop first, then steady the picture
+    assert recipe.validate({"faces": "real", "steps": ["crop_borders", "stabilise:light"]}, blocks)[0]["steps"][1]["settings"]["shift"] == 4
+    with pytest.raises(ValueError):
+        recipe.validate({"faces": "real", "steps": ["stabilise", "crop_borders"]}, blocks)
+
+
+def test_a_moving_step_gets_its_own_pass_and_its_own_check(monkeypatch, tmp_path):
+    blocks = library.load(Path("no/such"))[0]
+    ran = []
+    monkeypatch.setattr(pv, "run_scripted", lambda base, work, group, index, log=print, drawn=False: (
+        ran.append([b.name for b, _ in group]) or (Path(f"{base}+{index}"), {"said": "x"})))
+    rcp = recipe.validate({"faces": "real", "steps": ["dehalo", "stabilise", "deblock"]}, blocks)[0]
+    ctx = {"base": Path("src"), "shape_ref": Path("src"), "work": tmp_path, "prof": None,
+           "rec": SimpleNamespace(prepass={}, notes=[]), "log": lambda m: None, "drawn": False}
+    assert pv.run_steps(ctx, rcp["steps"], blocks) and ran == [["dehalo"], ["stabilise"], ["deblock"]]
+    # and inside the pass the moved check is the one that judges it
+    from vidimg.guard import GuardReport
+    used = []
+    monkeypatch.undo()
+    monkeypatch.setattr(pv, "verify_moved", lambda a, b, **k: used.append(("moved", k)) or GuardReport(True, []))
+    monkeypatch.setattr(pv, "verify_cleanup", lambda a, b, **k: used.append(("guard", k)) or GuardReport(True, []))
+    monkeypatch.setattr(pv.avs, "available", lambda: (True, ""))
+    monkeypatch.setattr(pv.avs, "render", lambda src, dst, stages, work=None: (Path(dst).write_bytes(b"x"), SimpleNamespace(
+        ok=True, error=None, details={"script": "s", "frames": 1}))[1])
+    monkeypatch.setattr(pv.avs, "_rate", lambda p: (None, 0, {}))
+    for name in ("fix_av_offset", "fix_aspect"):
+        monkeypatch.setattr(pv.media, name, lambda a, b: None)
+    monkeypatch.setattr(pv.media, "colour_hint", lambda p: {})
+    src = tmp_path / "in.mkv"
+    src.write_bytes(b"x")
+    st, dh = blocks["stabilise"], blocks["dehalo"]
+    assert pv.run_scripted(src, tmp_path / "w", [(st, library.resolve(st, "strong"))], 1, log=lambda m: None)[0]
+    assert pv.run_scripted(src, tmp_path / "w", [(dh, library.resolve(dh))], 2, log=lambda m: None)[0]
+    assert used[0] == ("moved", {"max_shift": 16.0}) and used[1][0] == "guard"

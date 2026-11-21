@@ -1,0 +1,48 @@
+{
+ "name": "degrain",
+ "kind": "filter",
+ "engine": "avisynth",
+ "addresses": [
+  "noise"
+ ],
+ "what": "motion-compensated temporal denoise (SMDegrain): averages each area with the same area of neighbouring frames, so real detail survives where plain blurring would not; never sharpens",
+ "when": "the close-ups show fine speckle that changes on every frame (tape or film noise), not painted texture that stays put",
+ "script": [
+  "SMDegrain(tr={tr}, thSAD={thsad}, RefineMotion=true, prefilter=1, contrasharp=false)"
+ ],
+ "params": {
+  "tr": {
+   "type": "int",
+   "min": 1,
+   "max": 4,
+   "default": 2
+  },
+  "thsad": {
+   "type": "int",
+   "min": 100,
+   "max": 600,
+   "default": 250
+  }
+ },
+ "presets": {
+  "light": {
+   "tr": 1,
+   "thsad": 150
+  },
+  "medium": {
+   "tr": 2,
+   "thsad": 250
+  },
+  "strong": {
+   "tr": 3,
+   "thsad": 400
+  }
+ },
+ "default_preset": "light",
+ "softens": "fine texture and film grain; at strong, faint detail in dark areas",
+ "status": "candidate",
+ "tried_on": [
+  "written from restoration practice; runs and passes the guard on a 15 s cut of an owner cartoon that does not show this defect (safe to try). Whether it helps on a source that has the defect is not shown yet"
+ ],
+ "version": 1
+}

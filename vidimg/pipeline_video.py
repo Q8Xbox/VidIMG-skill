@@ -22,7 +22,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Callable
 
-from . import cleanup, config
+from . import cleanup, config, library
+from . import recipe as recipe_mod
 from .adapters import avisynth as avs
 from .adapters import free_sr, video2x
 from .adapters import vapoursynth as vsb
@@ -30,7 +31,7 @@ from . import media
 from .adapters import AdapterResult, mark_output, safe_output_dir
 from . import texture as texture_pass
 from .guard.video import (_ffmpeg, _frames_by_index, verify_chroma, verify_cleanup, verify_crop, verify_deblend,
-                          verify_derepeat, verify_mask, verify_spans, verify_video)
+                          verify_derepeat, verify_mask, verify_moved, verify_spans, verify_video)
 from .probe import blend as blend_probe
 from .probe import chroma as chroma_probe
 from .probe import framing as framing_probe
@@ -68,6 +69,7 @@ class VideoRecord:
     notes: list[str] = field(default_factory=list)
     sheets: list[str] = field(default_factory=list)
     prepass: dict = field(default_factory=dict)
+    recipe: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -244,11 +246,24 @@ def _plan_candidates(p: probe.VideoProfile, scale: float | None, content: str,
     if is_anime(p, content):
         # anime / cartoon: Video2X anime models (free, Vulkan). Measured on the owner's cartoon samples
         # (PLAN.md 3.7): Real-ESRGAN anime-v3 first, Real-CUGAN as the alternative.
-        k = int(round(scale)) if scale else 2
-        if not scale and p.height > 720:
-            return f"anime/cartoon at {p.height}p: already large for a x2 anime model (ask for --scale 2 to force)", []
+        # no scale given: SD and 720p-class cartoons are enlarged x2; larger ones are cleaned at their own size
+        k = int(round(scale)) if scale else (2 if p.height <= 720 else 1)
+        if k == 1:
+            # the anime models only enlarge, so they run at x2 and the result is scaled back (video2x._run_same_size);
+            # under cartoon rules the face gates are advisory, which the real-footage route at the same size is not
+            # (an owner cartoon failed identity / landmarks there on one preview of three, 2026-11-21)
+            why = (f"{size_note}; anime/cartoon ({'requested' if content == 'anime' else 'detected'}) cleaned at its "
+                   "own size: Real-ESRGAN anime-v3 at x2 scaled back first, Real-CUGAN the same way second, "
+                   "general-v3 at this size third")
+            cands = [
+                ("anime esrgan-v3", lambda: [video2x.AnimeSR("realesrgan", "realesr-animevideov3", 2, same_size=True)]),
+                ("anime cugan", lambda: [video2x.AnimeSR("realcugan", "models-se", 2, same_size=True)]),
+                ("free general-v3", lambda: [free_sr.FreeSR(model="general_x4v3", height=p.height)])]
+            if all_models:
+                cands.append(("anime cugan-pro", lambda: [video2x.AnimeSR("realcugan", "models-pro", 2, same_size=True)]))
+            return why, cands
         if k not in (2, 3, 4):
-            return f"anime/cartoon: Video2X anime models support x2/x3/x4, not x{scale:g}", []
+            return f"anime/cartoon: Video2X anime models support x1 (same size), x2, x3 or x4, not x{scale:g}", []
         why = (f"{size_note}; anime/cartoon ({'requested' if content == 'anime' else 'detected'}): "
                f"Video2X Real-ESRGAN anime-v3 x{k} first, Real-CUGAN second")
         h_out = out_h or p.height * k
@@ -737,47 +752,227 @@ def run_spans(base: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple
     return dst, info
 
 
-def run_cleanup(base: Path, work: Path, filters: list[dict], log=print, drawn: bool = False) -> tuple[Path | None, dict]:
-    """The composed picture filters (deblock, dehalo) as one pass. None when it was not done or did not pass its
+def run_scripted(base: Path, work: Path, group: list[tuple], index: int, log=print,
+                 drawn: bool = False) -> tuple[Path | None, dict]:
+    """Scripted blocks from the library (library.py) that follow one another in a recipe, as one pass.
+    group: [(block, settings), ...], all on the same engine. None when the pass was not done or did not pass its
     guard: the caller keeps the input."""
-    cdir = work / "cleanup"
-    dst, done = cdir / "cleanup.nut", cdir / "cleanup.done"
-    stages = cleanup.picture_stages(filters)
-    if not stages:
-        return None, {"skipped": "no picture filter in the recipe"}
-    said = cleanup.describe([f for f in filters if f["name"] != "deinterlace_scenes"])
-    made_by = fingerprint(base.name, base.stat().st_size, [repr(s) for s in stages])
+    engine = group[0][0].engine
+    names = [b.name for b, _ in group]
+    said = ", ".join(b.name + (f" ({', '.join(f'{k} {v:g}' if isinstance(v, float) else f'{k} {v}' for k, v in vals.items())})"
+                                if vals else "") for b, vals in group)
+    lines = [(b, library.render(b, vals)) for b, vals in group]
+    for b, text in lines:
+        library.check_script(b, text)
+    pdir = work / f"pass{index}_{'_'.join(names)}"[:80]
+    dst, done = pdir / "pass.nut", pdir / "pass.done"
+    made_by = fingerprint(base.name, base.stat().st_size, engine, [t for _, t in lines])
     if dst.exists() and done.exists():
         info = json.loads(done.read_text(encoding="utf-8"))
         if info.get("fingerprint") == made_by:
-            log(f"   clean-up: reusing the finished pass ({said})")
+            log(f"   {said}: reusing the finished pass")
             return dst, info | {"reused": True}
-        shutil.rmtree(cdir, ignore_errors=True)
+        shutil.rmtree(pdir, ignore_errors=True)
         shutil.rmtree(work / "chunks", ignore_errors=True)
-    ok, why = avs.available()
-    if not ok:
-        return None, {"skipped": f"AviSynth+ not available ({why}); no clean-up"}
-    cdir.mkdir(parents=True, exist_ok=True)
-    r = avs.render(base, dst, stages, work=cdir)
-    info: dict = {"engine": "avisynth", "filters": said, "ok": r.ok, "error": r.error,
-                  "script": r.details.get("script"), "frames": r.details.get("frames")}
-    if not r.ok:
-        info["skipped"] = f"the pass failed: {r.error}"
+    pdir.mkdir(parents=True, exist_ok=True)
+    info: dict = {"engine": engine, "blocks": names, "said": said}
+    colour = media.colour_hint(base) or avs._rate(base)[2]
+    if engine == "avisynth":
+        ok, why = avs.available()
+        if not ok:
+            return None, info | {"skipped": f"AviSynth+ not available ({why})"}
+        r = avs.render(base, dst, [avs.Lines(text, b.name) for b, text in lines], work=pdir)
+        info.update(ok=r.ok, error=r.error, script=r.details.get("script"), frames=r.details.get("frames"))
+    else:
+        if avs.is_full_range(colour):
+            return None, info | {"skipped": "full-range source: an ffmpeg block would have to change its levels"}
+        vf = ",".join(ln for _, text in lines for ln in text)
+        cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(base),
+                             "-map", "0:v:0", "-map", "0:a?", "-c:a", "copy", "-map_metadata", "0", "-vf", vf,
+                             "-fps_mode", "passthrough", *avs.INTERMEDIATE, str(dst)],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        info.update(ok=cp.returncode == 0 and dst.exists(), error=cp.stderr.strip()[-300:] or None, script=vf)
+    if not info["ok"]:
+        info["skipped"] = f"the pass failed: {info['error']}"
         return None, info
-    colour = media.colour_hint(base) or media.colour_hint(dst)
     info["colour"] = media.write_colour_sidecar(dst, colour) if colour else {}
     info["av_sync"] = media.fix_av_offset(base, dst)
     info["aspect"] = media.fix_aspect(base, dst)
-    rep_ = verify_cleanup(base, dst, deblocked=any(isinstance(s, avs.Deblock) for s in stages), drawn_faces=drawn)
+    if group[0][0].check == "moved":
+        # a pass that moves the picture has a check of its own (the video guard compares frames in place)
+        rep_ = verify_moved(base, dst, max_shift=max(float(vals.get("shift", 0)) for _, vals in group))
+    else:
+        rep_ = verify_cleanup(base, dst, deblocked=any((b.effect or {}).get("metric") == "blockiness" for b, _ in group),
+                              drawn_faces=drawn)
     info["guard"] = {g.name: {"status": g.status, "value": g.value} for g in rep_.gates}
     info["guard_passed"] = rep_.passed
-    log(f"   clean-up ({said}): guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    log(f"   {said}: guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
     if not rep_.passed:
-        info["skipped"] = f"the pass failed its guard ({', '.join(rep_.failed())}): no clean-up"
+        info["skipped"] = f"the pass failed its guard ({', '.join(rep_.failed())})"
         return None, info
     info["fingerprint"] = made_by
     done.write_text(json.dumps({k: v for k, v in info.items() if k != "script"}, default=str), encoding="utf-8")
     return dst, info
+
+
+def default_models(p: probe.VideoProfile, drawn: bool) -> tuple[list[str], str]:
+    """The order the measurements support when a recipe names no model (PLAN.md 3.7 for drawings; the person's 12
+    real segments for footage: the faithful non-GAN models when their run fits, otherwise the compact one)."""
+    if drawn:
+        return ["esrgan-v3", "cugan", "general-v3"], "anime-v3, then Real-CUGAN, then general-v3"
+    frames = (p.frames or round(p.duration * (p.fps or 30))) * (2 if "interlaced" in p.flags else 1)
+    est_h = frames * p.width * p.height / FREE_NONGAN_PIXELS_PER_S / 3600
+    if est_h <= FREE_NONGAN_MAX_HOURS:
+        return ["realesrnet", "bsrnet", "general-v3"], f"faithful non-GAN models first (est. {est_h:.1f} h)"
+    return ["general-v3"], f"general-v3 only: the faithful models would need about {est_h:.0f} h"
+
+
+def recipe_candidates(p: probe.VideoProfile, rcp: dict, blocks: dict) -> tuple[str, list[tuple[str, Callable[[], list]]]]:
+    """The model candidates a recipe asks for, in its order; unless it is strict, the order the measurements
+    support follows. Any model may be asked for at any size: an anime model at the source's own size runs at x2
+    and is scaled back."""
+    drawn = rcp["faces"] == "drawn"
+    scale = rcp["scale"]
+    if scale is None and drawn:
+        scale = 2 if (p.height or 0) <= 720 else 1          # drawings: SD and 720p-class x2, larger at their size
+    out_h, size_note = target_size(p, scale)
+    if scale == 1:
+        size_note = f"own size ({p.width}x{p.height})"
+    height = out_h or p.height
+    usual, usual_why = default_models(p, drawn)
+    order = list(rcp["models"]) + ([] if rcp["model_strict"] and rcp["models"] else
+                                   [m for m in usual if m not in rcp["models"]])
+    cands = []
+    for name in order:
+        b = blocks[name]
+        spec = b.spec
+        if b.runner == "video2x":
+            k = int(round(scale or 2))
+            if abs((scale or 2) - k) > 1e-6 or k not in spec.get("scales", [2]):
+                continue                                    # the anime models work at whole factors only
+            cands.append((spec["label"], lambda s=spec, k=k: [video2x.AnimeSR(s["processor"], s["model"], max(2, k),
+                                                                             same_size=(k == 1))]))
+        else:
+            cands.append((spec["label"], lambda s=spec: [free_sr.FreeSR(model=s["model"], height=height)]))
+    asked = (", ".join(rcp["models"]) + (" only (asked for)" if rcp["model_strict"] else " first (chosen), then ")
+             if rcp["models"] else "")
+    why = (f"{size_note}; faces {rcp['faces']}; models: {asked}"
+           + ("" if rcp["models"] and rcp["model_strict"] else usual_why))
+    return why, cands
+
+
+# ----------------------------------------------------------------------------- the steps of a recipe
+def _step_fields(c: dict, settings: dict) -> bool:
+    """Classical field handling as planned from the measurements. False = stop: the original stays."""
+    rec, prof, log = c["rec"], c["prof"], c["log"]
+    mask = bool(settings.get("mask_tape_noise"))
+    for n in tape_notes(prof, masked=mask and "head_switching" in prof.flags):
+        rec.notes.append(n)
+        log(f"   note: {n}")
+    if not plan_prepass(prof, mask)[0]:
+        return True
+    pre, info = run_prepass(c["base"], c["work"], prof, log, mask_tape_noise=mask)
+    rec.prepass.update(info)
+    if pre is None:
+        rec.notes.append("classical pre-pass failed or did not pass the guard: the original stays the deliverable")
+        return False
+    c["base"] = pre                    # progressive; audio and metadata carried along
+    cc = info.get("chroma_check") or {}
+    if cc.get("passed"):
+        rec.notes.append(next((w for w in str(info.get("plan", "")).split("; ")
+                               if w.startswith("chroma shift")), "chroma shift corrected"))
+    elif cc:
+        rec.notes.append("chroma shift found, but the correction did not pass its check: colour left as it was")
+    d = info.get("deblend") or {}
+    if d.get("guard_passed"):
+        rec.notes.append(f"blended frames removed with sRestore: {float(Fraction(d['fps_in'])):.3f} -> "
+                         f"{float(Fraction(d['fps_out'])):.3f} fps (blends {d['blend_share_before']:.0%} -> "
+                         f"{d['blend_share_after']:.0%}); fewer frames, same duration and audio")
+    elif d.get("skipped"):
+        rec.notes.append(f"blended frames found but not removed: {d['skipped']}")
+    return True
+
+
+def _step_spans(c: dict, settings: dict) -> bool:
+    rec, prof = c["rec"], c["prof"]
+    if "partly_interlaced" not in prof.flags:
+        rec.notes.append("deinterlace_scenes asked for, but no interlaced stretch was measured: nothing done")
+        return True
+    un, d = run_spans(c["base"], c["work"], prof, c["log"])
+    rec.prepass["spans"] = d
+    if un is not None:
+        c["base"] = un
+        rec.notes.append(f"interlaced stretches deinterlaced: {len(d['spans'])} spans, {d.get('span_frames')} "
+                         f"of {prof.combing.get('frames')} frames; every other frame is untouched")
+    else:
+        rec.notes.append(f"interlaced stretches found but not deinterlaced: {d.get('skipped')}")
+    return True
+
+
+def _step_derepeat(c: dict, settings: dict) -> bool:
+    rec, prof = c["rec"], c["prof"]
+    if "padded_repeats" not in prof.flags:
+        rec.notes.append("repeat removal asked for, but no padding cycle was measured: nothing dropped")
+        return True
+    un, d = run_derepeat(c["base"], c["work"], prof, c["log"])
+    rec.prepass["derepeat"] = d
+    if un is not None:
+        c["base"] = un
+        rec.notes.append(f"copied frames removed: {float(Fraction(d['fps_in'])):.3f} -> "
+                         f"{float(Fraction(d['fps_out'])):.3f} fps, the original's rate (every "
+                         f"{d.get('cycle')}th frame was a copy); fewer frames, same duration and audio")
+    else:
+        rec.notes.append(f"copied frames found but not removed: {d.get('skipped')}")
+    return True
+
+
+def _step_crop(c: dict, settings: dict) -> bool:
+    rec, prof = c["rec"], c["prof"]
+    if "black_borders" not in prof.flags:
+        rec.notes.append("border crop asked for, but no black bar was measured: nothing cut")
+        return True
+    cut, d = run_crop(c["base"], c["work"], prof, c["log"])
+    rec.prepass["crop"] = d
+    if cut is not None:
+        c["base"] = c["shape_ref"] = cut
+        b = d["borders"]
+        rec.notes.append(f"black borders cut away (left {b['left']}, right {b['right']}, top {b['top']}, "
+                         f"bottom {b['bottom']} px): {prof.width}x{prof.height} -> "
+                         f"{d['crop']['width']}x{d['crop']['height']} before enlarging; the picture itself "
+                         "is untouched")
+    else:
+        rec.notes.append(f"black borders found but not cut: {d.get('skipped')}")
+    return True
+
+
+STEP_RUNNERS = {"fields": _step_fields, "spans": _step_spans, "derepeat": _step_derepeat, "crop": _step_crop}
+
+
+def run_steps(c: dict, steps: list[dict], blocks: dict) -> bool:
+    """The steps of a recipe before the model, in the recipe's order. Built-in steps run their own function;
+    scripted blocks that follow one another on the same engine share one pass. False = stop, the original stays."""
+    n, i = 0, 0
+    while i < len(steps):
+        b = blocks[steps[i]["block"]]
+        if not b.scripted:
+            if not STEP_RUNNERS[b.runner](c, steps[i].get("settings") or {}):
+                return False
+            i += 1
+            continue
+        group = []
+        while (i < len(steps) and blocks[steps[i]["block"]].engine == b.engine
+               and blocks[steps[i]["block"]].check == b.check):
+            group.append((blocks[steps[i]["block"]], steps[i].get("settings") or {}))
+            i += 1
+        n += 1
+        out, info = run_scripted(c["base"], c["work"], group, n, c["log"], drawn=c["drawn"])
+        c["rec"].prepass[f"pass{n}"] = info
+        if out is not None:
+            c["base"] = out
+            c["rec"].notes.append(f"clean-up before the model: {info['said']}")
+        else:
+            c["rec"].notes.append(f"clean-up asked for but not applied ({info['said']}): {info.get('skipped')}")
+    return True
 
 
 # ----------------------------------------------------------------------------- padded repeats, black borders
@@ -1026,8 +1221,9 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
                   on_progress: Callable[[int, int], None] | None = None, log=print,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
                   mask_tape_noise: bool = False, model_strict: bool = True, remove_repeats: bool = False,
-                  crop_borders: bool = False, filters=None) -> VideoRecord:
-    filters = cleanup.parse(filters)
+                  crop_borders: bool = False, filters=None, recipe: dict | None = None) -> VideoRecord:
+    """recipe: what this video gets, composed from the block library (recipe.py). Without one, the older
+    settings (content, model, scale, filters, ...) are read as a recipe; there is one way through the pipeline."""
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
     mark_output(out_dir)
@@ -1052,95 +1248,55 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
         if choice_file.exists():
             choice_file.unlink()               # a different file under the same name: choose again
     rec = VideoRecord(str(src), prof.to_dict(), "")
-    rec.plan, cands = plan_candidates(prof, scale, content, model, strict=model_strict)
-    options = ({"scale": scale, "content": content} | ({"model": model} if model else {})
-               | ({"model_first": True} if model and not model_strict else {})
-               | ({"engine": config.VIDEO_ENGINE} if config.VIDEO_ENGINE != "auto" else {})
-               | ({"texture": config.TEXTURE_STRENGTH} if config.TEXTURE_STRENGTH != 1.0 else {})
-               | ({"mask_tape_noise": True} if mask_tape_noise else {})
-               | ({"remove_repeats": True} if remove_repeats else {})
-               | ({"crop_borders": True} if crop_borders else {})
-               | ({"filters": cleanup.describe(filters)} if filters else {}))
-    drawn = is_anime(prof, content)
+    blocks, _ = library.load()
+    if recipe is None:
+        recipe = recipe_mod.from_decision(
+            {"content": content, "model": model, "model_strict": model_strict and model is not None, "scale": scale,
+             "filters": filters, "remove_repeats": remove_repeats, "crop_borders": crop_borders,
+             "mask_tape_noise": mask_tape_noise,
+             "texture": config.TEXTURE_STRENGTH if config.TEXTURE_STRENGTH != 1.0 else None}, prof.flags)
+    recipe, advice = recipe_mod.validate(recipe, blocks)
+    if {"interlaced", "telecine"} & set(prof.flags) and not any(st["block"] == "fields" for st in recipe["steps"]):
+        # the one step a recipe may not leave out: no later step and no model works on woven fields
+        recipe["steps"].insert(0, {"block": "fields"})
+        rec.notes.append("fields added to the recipe: the source is interlaced or telecined, and every later step "
+                         "needs progressive frames")
+    rec.recipe = recipe
+    drawn = recipe["faces"] == "drawn"
+    rec.plan, cands = recipe_candidates(prof, recipe, blocks)
+    options = {"recipe": recipe} | ({"engine": config.VIDEO_ENGINE} if config.VIDEO_ENGINE != "auto" else {})
+    log(f"   recipe: {recipe_mod.describe(recipe)}")
     log(f"   plan: {rec.plan}")
-    for n in tape_notes(prof, masked=mask_tape_noise and "head_switching" in prof.flags):
-        rec.notes.append(n)
-        log(f"   note: {n}")
+    for a in advice:
+        rec.notes.append(f"advice on the recipe: {a}")
+        log(f"   advice: {a}")
+    if not any(st["block"] == "fields" for st in recipe["steps"]):
+        for n in tape_notes(prof):
+            rec.notes.append(n)
     if not cands:
         rec.notes.append(f"nothing to do: {rec.plan}; the original stays the deliverable")
         (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
         return rec
-    base = src
-    if plan_prepass(prof, mask_tape_noise)[0]:
-        pre, rec.prepass = run_prepass(src, work, prof, log, mask_tape_noise=mask_tape_noise)
-        if pre is None:
-            rec.notes.append("classical pre-pass failed or did not pass the guard: the original stays the deliverable")
-            (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
-            return rec
-        base = pre                     # progressive; audio and metadata carried along
-        cc = rec.prepass.get("chroma_check") or {}
-        if cc.get("passed"):
-            rec.notes.append(next((w for w in str(rec.prepass.get("plan", "")).split("; ")
-                                   if w.startswith("chroma shift")), "chroma shift corrected"))
-        elif cc:
-            rec.notes.append("chroma shift found, but the correction did not pass its check: colour left as it was")
-        d = rec.prepass.get("deblend") or {}
-        if d.get("guard_passed"):
-            rec.notes.append(f"blended frames removed with sRestore: {float(Fraction(d['fps_in'])):.3f} -> "
-                             f"{float(Fraction(d['fps_out'])):.3f} fps (blends {d['blend_share_before']:.0%} -> "
-                             f"{d['blend_share_after']:.0%}); fewer frames, same duration and audio")
-        elif d.get("skipped"):
-            rec.notes.append(f"blended frames found but not removed: {d['skipped']}")
-    # framing, each its own guarded pass on progressive frames: a pass that fails leaves the video as it was
-    shape_ref = src
-    if cleanup.wants_spans(filters):
-        if "partly_interlaced" not in prof.flags:
-            rec.notes.append("deinterlace_scenes asked for, but no interlaced stretch was measured: nothing done")
-        else:
-            un, rec.prepass["spans"] = run_spans(base, work, prof, log)
-            d = rec.prepass["spans"]
-            if un is not None:
-                base = un
-                rec.notes.append(f"interlaced stretches deinterlaced: {len(d['spans'])} spans, {d.get('span_frames')} "
-                                 f"of {prof.combing.get('frames')} frames; every other frame is untouched")
-            else:
-                rec.notes.append(f"interlaced stretches found but not deinterlaced: {d.get('skipped')}")
-    if remove_repeats:
-        if "padded_repeats" not in prof.flags:
-            rec.notes.append("repeat removal asked for, but no padding cycle was measured: nothing dropped")
-        else:
-            un, rec.prepass["derepeat"] = run_derepeat(base, work, prof, log)
-            d = rec.prepass["derepeat"]
-            if un is not None:
-                base = un
-                rec.notes.append(f"copied frames removed: {float(Fraction(d['fps_in'])):.3f} -> "
-                                 f"{float(Fraction(d['fps_out'])):.3f} fps, the original's rate (every "
-                                 f"{d.get('cycle')}th frame was a copy); fewer frames, same duration and audio")
-            else:
-                rec.notes.append(f"copied frames found but not removed: {d.get('skipped')}")
-    if cleanup.picture_stages(filters):
-        cl, rec.prepass["cleanup"] = run_cleanup(base, work, filters, log, drawn=drawn)
-        d = rec.prepass["cleanup"]
-        if cl is not None:
-            base = cl
-            rec.notes.append(f"clean-up before the model: {d['filters']}")
-        else:
-            rec.notes.append(f"clean-up asked for but not applied: {d.get('skipped')}")
-    if crop_borders:
-        if "black_borders" not in prof.flags:
-            rec.notes.append("border crop asked for, but no black bar was measured: nothing cut")
-        else:
-            cut, rec.prepass["crop"] = run_crop(base, work, prof, log)
-            d = rec.prepass["crop"]
-            if cut is not None:
-                base = shape_ref = cut
-                b = d["borders"]
-                rec.notes.append(f"black borders cut away (left {b['left']}, right {b['right']}, top {b['top']}, "
-                                 f"bottom {b['bottom']} px): {prof.width}x{prof.height} -> "
-                                 f"{d['crop']['width']}x{d['crop']['height']} before enlarging; the picture itself "
-                                 "is untouched")
-            else:
-                rec.notes.append(f"black borders found but not cut: {d.get('skipped')}")
+    texture_default = config.TEXTURE_STRENGTH
+    if recipe["texture"] is not None:
+        config.TEXTURE_STRENGTH = recipe["texture"]
+    try:
+        return _run_recipe(src, out_dir, work, prof, rec, recipe, blocks, cands, options, choice_file, drawn,
+                           preview_only, encoder, on_progress, log)
+    finally:
+        config.TEXTURE_STRENGTH = texture_default
+
+
+def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, rec: VideoRecord, recipe: dict,
+                blocks: dict, cands: list, options: dict, choice_file: Path, drawn: bool, preview_only: bool,
+                encoder: str, on_progress, log) -> VideoRecord:
+    # every step before the model is its own guarded pass on progressive frames; one that fails leaves the video
+    # as it was (only failed field handling stops the run: nothing can be built on woven fields)
+    ctx = {"base": src, "shape_ref": src, "work": work, "prof": prof, "rec": rec, "log": log, "drawn": drawn}
+    if not run_steps(ctx, recipe["steps"], blocks):
+        (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
+        return rec
+    base, shape_ref = ctx["base"], ctx["shape_ref"]
     saved = json.loads(choice_file.read_text(encoding="utf-8")) if choice_file.exists() else {}
     labels = [label for label, _ in cands]
     if saved.get("chosen") in labels and saved.get("options", options) == options and not preview_only:

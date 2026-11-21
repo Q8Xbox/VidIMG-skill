@@ -1,0 +1,53 @@
+{
+ "name": "stabilise",
+ "kind": "filter",
+ "engine": "avisynth",
+ "addresses": [
+  "jitter"
+ ],
+ "check": "moved",
+ "changes": [
+  "frame_position"
+ ],
+ "status": "candidate",
+ "what": "steadies a picture that trembles or weaves: the movement of the whole frame is measured from its motion vectors (mvtools MDepan) and smoothed (DePanStabilize); each frame is shifted by a few pixels, never zoomed, rotated or redrawn",
+ "when": "the whole picture trembles from frame to frame (film gate weave, an unstable tape, a hand-held copy), not when the camera moves on purpose",
+ "script": [
+  "__e = last.ConvertBits(8)",
+  "__s = MSuper(__e, pel=2)",
+  "__v = MAnalyse(__s, isb=false, blksize=16, overlap=8)",
+  "__d = MDepan(__e, __v, zoom=false, rot=false, thSCD1=400)",
+  "DePanStabilize(last, data=__d, cutoff={cutoff}, damping=1.0, dxmax={shift}, dymax={shift}, rotmax=0, zoommax=1.0, mirror=15, method=1)"
+ ],
+ "params": {
+  "shift": {
+   "type": "int",
+   "min": 2,
+   "max": 16,
+   "default": 8
+  },
+  "cutoff": {
+   "type": "float",
+   "min": 0.2,
+   "max": 2.0,
+   "default": 0.5
+  }
+ },
+ "presets": {
+  "light": {
+   "shift": 4
+  },
+  "medium": {
+   "shift": 8
+  },
+  "strong": {
+   "shift": 16
+  }
+ },
+ "default_preset": "medium",
+ "softens": "the strip the shift uncovers at the frame's edges (up to `shift` pixels) is filled by mirroring the picture next to it: that strip is not original picture; the shifted frames are resampled, a loss far below one level",
+ "tried_on": [
+  "none of the owner samples trembles, so jitter was created artificially on an owner cartoon cut (each frame displaced by up to 4 px): frame-to-frame movement 7.5 -> 2.3 (the clean cut reads 1.8); lined up, every sampled frame matched its source at 43 dB or better. Not yet tried on a real unsteady source"
+ ],
+ "version": 1
+}

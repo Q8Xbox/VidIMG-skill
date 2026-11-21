@@ -681,6 +681,84 @@ def verify_cleanup(src: Path, dst: Path, *, deblocked: bool = False, drawn_faces
         ["deblocking removed no block edges: keep the input"] if "blocks" in failed else []), False)
 
 
+# ----------------------------------------------------------------------------- stabilised: moved, not altered
+MOVED_PSNR = 40.0               # dB after lining the frames up. Measured on an owner cut with artificial jitter:
+                                # a stabilised frame against its input 43.3 at worst (median 52.3); the same frames
+                                # not lined up 26.9; a slightly blurred copy 35.3; another frame 21.3
+MOVED_STEADIER = 0.8            # frame-to-frame movement must fall to this share of the input's, or nothing was gained
+MOVED_MIN_FRAMES = 4            # sampled frames that must be judged (a flat frame gives no position to read)
+MOVED_RESPONSE = 0.1            # phase-correlation response below which a frame's position is not trusted
+
+
+def _shake(path: Path, windows: int = 3, seconds: float = 3.0) -> float | None:
+    """Mean change from one frame to the next (8-bit luma at analysis size), over windows spread through the video."""
+    from ..probe import blend
+
+    dur = media.probe(path, exact=True)["duration"]
+    vals = []
+    for k in range(windows):
+        fr = [f.astype(np.float32) for f in blend.read_gray(path, max(0.0, dur * (k + 0.5) / windows - seconds / 2), seconds, width=180)]
+        vals += [float(np.mean(np.abs(fr[i + 1] - fr[i]))) for i in range(len(fr) - 1)]
+    return float(np.mean(vals)) if vals else None
+
+
+def verify_moved(src: Path, dst: Path, *, max_shift: float, frames: int = 16) -> GuardReport:
+    """A stabilised video against its input. The ordinary guard compares each frame with the source frame in
+    place, so it reads a picture that was only moved as a picture that was changed. Here each sampled frame is
+    first lined up with its source (the translation is measured, by phase correlation), and then:
+    * shift: no frame was moved further than the step was allowed to move it;
+    * picture: lined up, the frame is the source's, in all three colour channels, away from the edges the move
+      uncovered (a stabiliser may shift the picture; it may not blur, redraw, zoom or rotate it);
+    * steadier: the frame-to-frame movement fell, otherwise the step is not worth keeping;
+    and the structure is unchanged: same frames, duration, audio, lip sync, shape."""
+    from fractions import Fraction
+
+    src, dst = Path(src), Path(dst)
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    gates = _rate_gates(a, b, Fraction(1), Fraction(1))
+    total = min(a["frames"], b["frames"])
+    idx = sorted({int(total * (i + 0.5) / frames) for i in range(frames)})
+    margin = int(np.ceil(max_shift)) + 6
+    worst = far = None
+    judged = 0
+    with tempfile.TemporaryDirectory(prefix="vidimg_moved_") as tmp:
+        fa = _frames_by_index(src, idx, Path(tmp), "s")
+        fb = _frames_by_index(dst, idx, Path(tmp), "d")
+        for i in idx:
+            if i not in fa or i not in fb:
+                continue
+            x, y = imgfile.imread(str(fa[i])), imgfile.imread(str(fb[i]))
+            if x is None or y is None or x.shape != y.shape or min(x.shape[:2]) <= 4 * margin:
+                continue
+            gx, gy = (cv2.cvtColor(f, cv2.COLOR_BGR2GRAY).astype(np.float32) for f in (x, y))
+            (dx, dy), response = cv2.phaseCorrelate(gx, gy, cv2.createHanningWindow((gx.shape[1], gx.shape[0]), cv2.CV_32F))
+            if response < MOVED_RESPONSE:
+                continue                                    # nothing to hold on to in this frame
+            lined = cv2.warpAffine(x.astype(np.float32), np.float32([[1, 0, dx], [0, 1, dy]]), (x.shape[1], x.shape[0]),
+                                   flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+            diff = (lined - y.astype(np.float32))[margin:-margin, margin:-margin]
+            p = float(10 * np.log10(255 ** 2 / max(float(np.mean(diff ** 2)), 1e-6)))
+            judged += 1
+            worst = p if worst is None else min(worst, p)
+            far = max(far or 0.0, abs(float(dx)), abs(float(dy)))
+    ok = judged >= MOVED_MIN_FRAMES
+    gates.append(Gate("shift", "pass" if ok and far <= max_shift + 0.5 else "fail", None if far is None else round(far, 2),
+                      max_shift, f"largest move of a sampled frame, in pixels ({judged} frames judged)"))
+    gates.append(Gate("picture", "pass" if ok and worst >= MOVED_PSNR else "fail", None if worst is None else round(worst, 1),
+                      MOVED_PSNR, "each frame lined up with its source and compared (lowest of the sampled frames)"))
+    before, after = _shake(src), _shake(dst)
+    steadier = before is not None and after is not None and after <= MOVED_STEADIER * before
+    gates.append(Gate("steadier", "pass" if steadier else "fail", None if after is None else round(after, 3),
+                      None if before is None else round(MOVED_STEADIER * before, 3),
+                      f"frame-to-frame movement {before if before is None else round(before, 3)} before, "
+                      f"{after if after is None else round(after, 3)} after"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"shift": "a frame was moved further than allowed, or too few frames could be judged: keep the input",
+            "picture": "lined up, the frames are not the source's: the step changed the picture, not only its position",
+            "steadier": "the picture is no steadier than before: keep the input"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
 # ----------------------------------------------------------------------------- black borders cropped
 CROP_SAME_PSNR = 60.0           # dB: the picture inside the crop must be untouched
 CROP_BLACK_LEVEL = 40           # 8-bit luma: 95 % of what was cut away lies below this ...
@@ -789,7 +867,7 @@ def verify_chroma(src: Path, dst: Path, *, moved: dict, before: dict, luma_must_
         def luma(path: Path) -> np.ndarray:
             raw = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-map",
                                   "0:v:0", "-frames:v", str(frames), "-vf", "format=yuv420p16le,extractplanes=y",
-                                  "-pix_fmt", "gray16le", "-f", "rawvideo", "-"], capture_output=True).stdout
+                                  "-pix_fmt", "gray16le", "-f", "rawvideo", "-"], capture_output=True, stdin=subprocess.DEVNULL).stdout
             n = len(raw) // (w * h * 2)
             return (np.frombuffer(raw[: n * w * h * 2], "<u2").reshape(n, h, w) >> 8).astype(np.float32)
 
@@ -818,7 +896,7 @@ def verify_mask(src: Path, dst: Path, *, rows: int, luma_must_match: bool, frame
     def luma(path: Path, w: int, h: int) -> np.ndarray:
         raw = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-map", "0:v:0",
                               "-frames:v", str(frames), "-vf", "format=yuv420p16le,extractplanes=y", "-pix_fmt",
-                              "gray16le", "-f", "rawvideo", "-"], capture_output=True).stdout
+                              "gray16le", "-f", "rawvideo", "-"], capture_output=True, stdin=subprocess.DEVNULL).stdout
         n = len(raw) // (w * h * 2)
         return (np.frombuffer(raw[: n * w * h * 2], "<u2").reshape(n, h, w) >> 8).astype(np.float32)
 

@@ -1,0 +1,94 @@
+{
+ "interlaced": {
+  "looks_like": "comb teeth on every moving edge",
+  "measured_by": "interlaced"
+ },
+ "telecine": {
+  "looks_like": "comb teeth on two frames of every five",
+  "measured_by": "telecine"
+ },
+ "blended": {
+  "looks_like": "ghosted double images where two drawings or fields are mixed",
+  "measured_by": "blended"
+ },
+ "partly_interlaced": {
+  "looks_like": "comb teeth in some stretches only (titles, credits, an inserted scene)",
+  "measured_by": "partly_interlaced"
+ },
+ "chroma_shift": {
+  "looks_like": "colour sitting beside the lines instead of inside them",
+  "measured_by": "chroma_shift"
+ },
+ "padded_repeats": {
+  "looks_like": "one picture shown twice at regular intervals; motion judders",
+  "measured_by": "padded_repeats"
+ },
+ "black_borders": {
+  "looks_like": "black bars at the edges that are not picture",
+  "measured_by": "black_borders"
+ },
+ "block_edges": {
+  "looks_like": "a grid of square blocks in flat colours and around lines",
+  "measured_by": "compressed"
+ },
+ "noise": {
+  "looks_like": "fine dancing speckle over the whole picture, different on every frame",
+  "measured_by": "noisy"
+ },
+ "head_switching": {
+  "looks_like": "a band of torn lines at the bottom of a tape capture",
+  "measured_by": "head_switching"
+ },
+ "halos": {
+  "looks_like": "a bright rim running along dark lines",
+  "measured_by": null
+ },
+ "rainbows": {
+  "looks_like": "shimmering colour bands on fine black-and-white detail (composite video)",
+  "measured_by": null
+ },
+ "dot_crawl": {
+  "looks_like": "a crawling checkerboard along colour edges (composite video)",
+  "measured_by": null
+ },
+ "stair_steps": {
+  "looks_like": "jagged steps on diagonal lines from an earlier bad resize or deinterlace",
+  "measured_by": null
+ },
+ "banding": {
+  "looks_like": "visible steps in smooth gradients (skies, fades)",
+  "measured_by": null
+ },
+ "chroma_noise": {
+  "looks_like": "blotchy colour crawling in flat areas while the lines stay sharp (tape)",
+  "measured_by": null
+ },
+ "spots": {
+  "looks_like": "dust, dirt or scratches that appear on single frames (film), dropouts (tape)",
+  "measured_by": null
+ },
+ "residual_combing": {
+  "looks_like": "faint leftover teeth after an earlier deinterlace",
+  "measured_by": null
+ },
+ "brightness_flicker": {
+  "looks_like": "the whole picture pulsing lighter and darker",
+  "measured_by": null
+ },
+ "jitter": {
+  "looks_like": "the whole picture trembling or weaving (film gate, tape)",
+  "measured_by": null
+ },
+ "top_flagging": {
+  "looks_like": "the top of the picture bending sideways (tape)",
+  "measured_by": "top_flagging",
+  "repairable": false,
+  "why": "a timing error: capture the tape again through a time-base corrector"
+ },
+ "clipped_highlights": {
+  "looks_like": "bright areas burnt to plain white",
+  "measured_by": "clipped_highlights",
+  "repairable": false,
+  "why": "the detail is not in the file"
+ }
+}

@@ -214,7 +214,7 @@ def read_luma(src: Path, times: list[float]) -> list[np.ndarray]:
         raw = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{t:.3f}",
                               "-i", str(src), "-map", "0:v:0", "-frames:v", "1", "-vf",
                               "format=yuv420p16le,extractplanes=y", "-pix_fmt", "gray16le", "-f", "rawvideo", "-"],
-                             capture_output=True).stdout
+                             capture_output=True, stdin=subprocess.DEVNULL).stdout
         if len(raw) >= w * h * 2:
             out.append((np.frombuffer(raw[: w * h * 2], "<u2").reshape(h, w) >> 8).astype(np.uint8))
     return out

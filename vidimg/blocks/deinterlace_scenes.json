@@ -1,0 +1,18 @@
+{
+ "name": "deinterlace_scenes",
+ "kind": "field",
+ "engine": "builtin",
+ "runner": "spans",
+ "what": "deinterlaces only the measured interlaced stretches of an otherwise progressive video, at the same rate; every other frame is passed through untouched",
+ "when": "the analysis found interlaced spans AND the comb close-ups show horizontal teeth on moving edges (not thin drawn stripes)",
+ "needs": [
+  "source_frame_numbers"
+ ],
+ "tried_on": [
+  "owner DVD cartoon: 5 stretches, 712 of 16110 frames; comb teeth gone"
+ ],
+ "version": 1,
+ "addresses": [
+  "partly_interlaced"
+ ]
+}

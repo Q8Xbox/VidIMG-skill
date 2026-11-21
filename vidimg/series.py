@@ -102,7 +102,7 @@ def default_out_dir(src_dir: Path, episodes: list[tuple[int, Path]], scale: floa
 def _probe(path: Path) -> dict:
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                         "stream=width,height,nb_frames,r_frame_rate:format=duration", "-of", "json", str(path)],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     j = json.loads(r.stdout or "{}")
     s, f = (j.get("streams") or [{}])[0], j.get("format") or {}
     num, _, den = (s.get("r_frame_rate") or "0/1").partition("/")
@@ -117,7 +117,7 @@ def _frames(path: Path, start: float, count: int, w: int, h: int) -> list[np.nda
     """`count` decoded frames from `start` seconds (accurate seek), at the stream's storage size."""
     raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{start:.6f}", "-i", str(path), "-frames:v", str(count),
                           "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
-                         capture_output=True).stdout
+                         capture_output=True, stdin=subprocess.DEVNULL).stdout
     size = w * h * 3
     return [np.frombuffer(raw[k * size:(k + 1) * size], np.uint8).reshape(h, w, 3) for k in range(len(raw) // size)]
 
@@ -181,7 +181,8 @@ def _keep_awake() -> None:
 def restore_series(src_dir: Path, out: Path | None = None, wanted: set[int] | None = None, *,
                    scale: float | None = 2, content: str = "auto", model: str | None = None,
                    encoder: str = "hevc10", log: Callable[[str], None] = print,
-                   mask_tape_noise: bool = False, model_strict: bool = True, filters=None) -> dict:
+                   mask_tape_noise: bool = False, model_strict: bool = True, filters=None,
+                   recipe: dict | None = None) -> dict:
     """Restore every wanted episode into one folder and write the series report. Returns the status dict."""
     from . import pipeline_video
     from .report import compare, series_report
@@ -201,7 +202,7 @@ def restore_series(src_dir: Path, out: Path | None = None, wanted: set[int] | No
     status["_options"].update({"source": str(src_dir), "scale": scale, "content": content, "model": model,
                                "model_strict": model_strict,
                                "mask_tape_noise": mask_tape_noise, "episodes": [n for n, _ in episodes]}
-                              | ({"filters": filters} if filters else {}))
+                              | ({"filters": filters} if filters else {}) | ({"recipe": recipe} if recipe else {}))
 
     def save() -> None:
         status_file.write_text(json.dumps(status, indent=1, default=str), encoding="utf-8")
@@ -229,8 +230,14 @@ def restore_series(src_dir: Path, out: Path | None = None, wanted: set[int] | No
                 rec = pipeline_video.restore_video(src, out, scale=scale, content=content, model=model,
                                                    model_strict=model_strict,
                                                    mask_tape_noise=mask_tape_noise, filters=filters,
-                                                   encoder=encoder, log=lambda m: log(f"ep {key}: {m.strip()}"))
+                                                   recipe=recipe, encoder=encoder, log=lambda m: log(f"ep {key}: {m.strip()}"))
                 d = rec.to_dict()
+                if d.get("recipe"):
+                    try:
+                        from . import cases
+                        cases.record(src, d.get("profile") or {}, d["recipe"], d)
+                    except OSError:
+                        pass
                 (out / "records" / f"{src.stem}.json").write_text(
                     json.dumps(d, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
                 compare.video_page(d, out / "reports" / f"{src.stem}.html")

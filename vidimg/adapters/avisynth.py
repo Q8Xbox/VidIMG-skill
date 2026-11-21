@@ -320,13 +320,28 @@ class DeinterlaceSpans:
                 " ++ ".join(parts)]
 
 
+@dataclass
+class Lines:
+    """The script lines of a block from the library (library.py): a picture filter that keeps every frame, its
+    size and its rate. The library bounds what the lines may contain; the script linter applies as to any stage."""
+
+    text: list = field(default_factory=list)
+    name: str = "block"
+
+    def rate(self) -> Fraction:
+        return Fraction(1)
+
+    def lines(self) -> list[str]:
+        return list(self.text)
+
+
 AvsStage = (Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | MaskBottom | SRestore
-            | DropRepeats | Dehalo | DeinterlaceSpans)
+            | DropRepeats | Dehalo | DeinterlaceSpans | Lines)
 # processing order from the Doom9 consensus (04_doom9_practice.md 1.1). Deblock runs on the original
 # grid; for interlaced input, field handling comes first (Deblock_QED needs progressive frames).
 # Un-blending comes right after field handling: every later stage would smear the ghosts further.
 # Chroma shift is corrected on progressive frames, right after field handling.
-_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, DropRepeats: 2.3, DeinterlaceSpans: 2.05, Dehalo: 4.5, ChromaDenoise: 3,
+_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, DropRepeats: 2.3, DeinterlaceSpans: 2.05, Dehalo: 4.5, Lines: 3.5, ChromaDenoise: 3,
           Degrain: 4,
           Repair: 5}
 
