@@ -20,6 +20,7 @@ Run: python vidimg/mcp_server.py   (registered in .mcp.json)
 from __future__ import annotations
 
 import contextlib
+import json
 import sys
 import uuid
 from datetime import datetime
@@ -40,9 +41,12 @@ mcp = FastMCP("vidimg", instructions=(
     "anime, and a classical AviSynth+/VapourSynth pre-pass, every result checked by a calibrated "
     "fidelity guard (face identity, structure, colour, temporal). Default flow for anything the person "
     "gives you (one file, many files, folders, a series): survey_media -> job_status until done -> LOOK at "
-    "the contact sheets and correct the plan with decide_plan -> run_plan -> job_status until done -> show "
-    "the combined report. You make the decisions (content, model) from the analysis and what you see, and "
-    "say which and why; ask the person only about opt-in steps they did not mention. The single-file tools "
+    "the contact sheets and each video's closeups, and correct the plan with decide_plan (try_recipes first "
+    "when a look must settle the choice) -> run_plan -> job_status until done -> LOOK at the delivered "
+    "videos' before/after sheets and record review_results -> show the combined report. You supervise: the "
+    "measurements propose, you decide from what you see (content, model, texture, framing steps) and say "
+    "which and why, and the guard alone decides whether a result is faithful enough to deliver. Ask the "
+    "person only about opt-in steps they did not mention. The single-file tools "
     "(analyze_media, restore_photos, restore_video) remain for one-off or special requests. "
     "Never claim a result is faithful unless the guard passed it. Report to the person in English."))
 
@@ -114,7 +118,14 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               follows if the guard rejects it), model_strict true only when the person insists on that model
       scale (e.g. 2), texture 0..1 (source texture put back; default 1), mask_tape_noise (only if the person asks),
       preview_only (single videos), deblur (photos item; only if the person asks for blur removal),
+      crop_borders / remove_repeats (single videos): the item's `findings` say what was measured (black bars; a
+              slower original padded with copied frames). Set one true only after you LOOKED at the item's
+              `closeups` image and the finding is real there: the red outline leaves only black outside it; the
+              frames marked COPY repeat a drawing in the middle of a movement. Each runs as its own checked pass
+              and is dropped, with a note, if its check fails,
       skip true, reason "why you decided this" (shown in the report).
+    When two or more recipes are plausible and the choice is about how the result looks, compare them with
+    try_recipes first.
     Confirm every video item, even when the analysis was right ({"v1": {"content": "anime"}}). Returns the summary."""
     from vidimg import auto
     with _quiet():
@@ -135,12 +146,53 @@ def run_plan(plan: str) -> dict:
 
 
 @mcp.tool()
+def try_recipes(plan: str, item_id: str, recipes: list[dict]) -> dict:
+    """Background job: compare 2 to 4 recipes for ONE video of a surveyed plan before deciding. Each recipe runs
+    the video's three guarded previews; the result is one image, a column per recipe beside the source, plus
+    per recipe whether the guard passed it. Use it when the analysis leaves a real choice that only a look can
+    settle: which model keeps the line art and the painted backgrounds best, how much source texture to return
+    (texture 1 / 0.5 / 0), with or without a framing step. recipes: [{name, content, model, scale, texture,
+    remove_repeats, crop_borders}, ...]; anything left out comes from the item's current decision. Poll
+    job_status; then LOOK at result items[...].trials.sheet, choose only among recipes the guard passed, tell the
+    person which and why, and set it with decide_plan. Nothing is delivered by a trial. A trial costs a few
+    minutes per recipe (the framing passes run on the whole video), so do not use it for choices the analysis
+    already settles."""
+    from vidimg import auto
+    p = auto.plan_path(Path(plan).expanduser())
+    loaded = auto.load(p)
+    out = Path(loaded["out"])
+    if not any(it["id"] == item_id and it["type"] in ("video", "series") for it in loaded["items"]):
+        raise ValueError(f"no video item {item_id!r} in the plan")
+    if not auto.TRIAL_RECIPES[0] <= len(recipes) <= auto.TRIAL_RECIPES[1]:
+        raise ValueError(f"give {auto.TRIAL_RECIPES[0]} to {auto.TRIAL_RECIPES[1]} recipes to compare")
+    spec = out / "trials" / item_id / "recipes.json"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(json.dumps(recipes, indent=1, ensure_ascii=False), encoding="utf-8")
+    return jobs.start("try-recipes", [item_id, str(spec)], out, f"try recipes: {item_id} ({len(recipes)})")
+
+
+@mcp.tool()
+def review_results(plan: str, reviews: dict[str, dict]) -> dict:
+    """After run_plan: record how each delivered video LOOKS. Open the before/after sheets of every delivered
+    item (result.sheets) and judge what the guard cannot: do the lines stay clean, did painted backgrounds turn
+    to smooth blobs, are halos or blocks sharper than before, does anything look worse than the source.
+    reviews: {item_id: {verdict: 'good' | 'acceptable' | 'redo', notes: "what you saw"}}. 'acceptable' names what
+    is not ideal; 'redo' sets the item back to pending: change its decision with decide_plan (another model, less
+    or more texture, a framing step) and run_plan again. The verdict and notes go into the combined report, and
+    you tell the person the same. Returns the summary."""
+    from vidimg import auto
+    with _quiet():
+        return auto.summary(auto.review(Path(plan).expanduser(), reviews))
+
+
+@mcp.tool()
 def analyze_media(path: str) -> dict:
     """Measure a photo or video and return its degradation profile plus the restoration plan the
     pipeline would follow (nothing is written). Photos: noise, softness, JPEG quality, faces and their
     sizes, anime detection. Videos: interlace/telecine, blended fields, chroma shift, tape defects (tape_advice: head
     switching, flagging, clipped highlights), compression, blur, noise, scene cuts, duplicates,
-    faces; the classical pre-pass and the model candidates; model_guide: what you need to choose the model yourself
+    faces, black borders and padded repeat frames (profile.borders / profile.repeats; corrected only when asked,
+    see restore_video); the classical pre-pass and the model candidates; model_guide: what you need to choose the model yourself
     (signals, measured strengths/weaknesses and estimated hours per model, a suggested pick with reasons)."""
     p = _existing(path)
     with _quiet():
@@ -191,7 +243,7 @@ def restore_photos(paths: list[str], out_dir: str | None = None, deblur: bool = 
 def restore_video(path: str, out_dir: str | None = None, preview_only: bool = False,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
                   engine: str | None = None, mask_tape_noise: bool = False, texture: float | None = None,
-                  model_strict: bool = False) -> dict:
+                  model_strict: bool = False, remove_repeats: bool = False, crop_borders: bool = False) -> dict:
     """Start a background job restoring one video: analyse; classical field handling first when needed
     (QTGMC for interlace, TFM+TDecimate for telecine, chroma-shift correction, sRestore for blended fields
     from a standards conversion); open-model candidates on three guarded preview
@@ -214,8 +266,12 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     mask_tape_noise: only when the person asks to hide VHS head-switching noise (analyze_media's tape_advice
     says when it was found): the bottom lines it covers are blacked out; the frame keeps its size.
     texture: source texture put back after the model, 0..1 (default 1). 0 only when the person wants the model's
-    clean, smooth look; lower values when returned compression noise bothers them. Returns the job; poll
-    job_status(job_id)."""
+    clean, smooth look; lower values when returned compression noise bothers them.
+    remove_repeats: when analyze_media's profile.repeats shows a padding cycle (a 25 or 23.976 fps original
+    padded to 29.97 with copied frames) and you agree after a look: the copies are dropped, back to the original
+    rate (fewer frames, same duration and audio). crop_borders: when profile.borders shows black bars and they
+    are bars, not picture: they are cut away before enlarging (a narrower frame, never stretched). Each is its own
+    checked pass; one that fails its check is skipped with a note. Returns the job; poll job_status(job_id)."""
     src = _existing(path)
     if src.suffix.lower() not in VIDEO_EXT:
         raise ValueError(f"not a video: {src.name}")
@@ -232,7 +288,8 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
             + (["--content", content] if content != "auto" else [])
             + ([("--model" if model_strict else "--prefer"), model] if model else [])
             + (["--engine", engine] if engine else []) + (["--mask-tape-noise"] if mask_tape_noise else [])
-            + (["--texture", f"{texture:g}"] if texture is not None else []))
+            + (["--texture", f"{texture:g}"] if texture is not None else [])
+            + (["--remove-repeats"] if remove_repeats else []) + (["--crop-borders"] if crop_borders else []))
     return jobs.start("restore-video", args, out, src.name)
 
 

@@ -23,7 +23,8 @@ from . import config, statefile
 
 ROOT = config.OUTPUT_ROOT / "jobs"
 LOCK = ROOT / "gpu.lock"
-KINDS = {"restore-photos": "restore", "restore-video": "restore-video", "survey": "auto", "run-plan": "run-plan"}
+KINDS = {"restore-photos": "restore", "restore-video": "restore-video", "survey": "auto", "run-plan": "run-plan",
+         "try-recipes": "try-recipes"}
 
 
 def _job_dir(job_id: str) -> Path:
@@ -177,7 +178,7 @@ def _tail(path: Path, n: int = 12) -> list[str]:
 
 def _result(meta: dict) -> dict:
     out = Path(meta["out"])
-    if meta["kind"] in ("survey", "run-plan"):
+    if meta["kind"] in ("survey", "run-plan", "try-recipes"):
         from . import auto
         try:
             return auto.summary(auto.load(out))

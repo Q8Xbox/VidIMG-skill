@@ -170,8 +170,13 @@ Claude follows the approved workflow in the `restore-media` skill and reports ba
 
 **What happens when you ask.** Claude first surveys what you gave it: it sorts the files into photos, single videos
 and numbered series, measures them, and prepares a plan with a decision for each (cartoon or real footage, which
-model, what size). It then looks at a contact sheet of all the videos, corrects the plan where the measurements
-were wrong, tells you in a few lines what it decided and why, and starts one job that works through everything.
+model, what size). It then looks at a contact sheet of all the videos and at close-ups of each one, corrects the
+plan where the measurements were wrong, and decides by eye whether measured defects are real (black bars to cut
+away, copied frames to drop). When the choice between two treatments is about how the result looks, it tries them
+on short previews, compares them side by side and picks one. It tells you in a few lines what it decided and why,
+and starts one job that works through everything. Afterwards it looks at the before/after frames of each result
+and writes down what it sees. Claude chooses how a result should look; only the fidelity guard decides whether a
+result is faithful enough to deliver.
 At the end you get one page (`index.html`) listing every item, what was decided, what was delivered and what kept
 its original, with links to the detailed before/after reports. If the job is interrupted, it continues where it
 stopped.

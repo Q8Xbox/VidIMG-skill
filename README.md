@@ -57,6 +57,17 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   photos, videos and series folders. It sorts and analyses everything, fills in a decision per item (content,
   model, scale, texture) with reasons, and shows all videos on a few contact sheets so Claude confirms "drawn or
   real" for every one by looking once. One resumable job then runs the whole plan and writes one combined report.
+- **Claude supervises, the guard vetoes:** the survey also gives Claude a close-up image per video (line art
+  enlarged without smoothing, the measured picture area outlined, a strip of consecutive frames) and a list of
+  findings that are corrected only when Claude confirms them by eye. `try_recipes` runs two to four recipes on a
+  video's guarded previews and lays them side by side, so the choice between models or texture strengths is made
+  by looking; only recipes the guard passed can be chosen. After the run Claude looks at the before/after sheets
+  and records a review (`review_results`: good, acceptable, redo) that appears in the report.
+- **Framing fixes for old cartoon transfers** (single videos, on Claude's decision, each its own checked pass):
+  black bars are cut away before enlarging (`crop_borders`; lossless, even edges, pixel shape kept, and the check
+  confirms that what was cut was black and the kept picture is untouched), and a slower original padded to 29.97
+  with copied frames goes back to its own rate (`remove_repeats`; TDecimate chooses frames, and the check
+  confirms every output frame is an input frame, no drawing was dropped and the copies are gone).
 - **Batches:** photos are processed in rounds; photos with identical settings share one model call
   (the model loads once) and every photo is checkpointed in `<out>/items/`. A photo that cannot be read is
   recorded and retried on resume; the others continue. Two photos with the same file name keep their own results.
@@ -95,7 +106,8 @@ Open this folder in Claude Code and approve the project MCP server `vidimg` when
 Or ask in plain words ("restore the photos in this folder"): the `restore-media` skill
 (`.claude/skills/restore-media/SKILL.md`) holds the workflow and the approved policy.
 
-MCP tools (`vidimg/mcp_server.py`): `doctor`, `survey_media`, `decide_plan`, `run_plan` (the automatic flow),
+MCP tools (`vidimg/mcp_server.py`): `doctor`, `survey_media`, `decide_plan`, `try_recipes`, `run_plan`,
+`review_results` (the automatic flow),
 `analyze_media`, `restore_photos`, `restore_video`, `job_status`, `list_jobs`, `cancel_job`, `resume_job`,
 `verify_restoration`, `compare_frames`.
 Restorations run as detached background jobs (`vidimg/jobs.py`, files under `<output root>/jobs/`), one GPU

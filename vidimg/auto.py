@@ -27,6 +27,7 @@ from . import imgfile
 
 import html
 import json
+import shutil
 import time
 import traceback
 from dataclasses import replace
@@ -40,13 +41,19 @@ from .media import IMAGE_EXT, VIDEO_EXT  # noqa: E402  (one list for every entry
 SERIES_MIN = 3                 # numbered episodes in one folder that make it a series
 SHEETS_PER_PAGE = 6            # video frame sheets per contact sheet
 PLAN_VERSION = 1
-VIDEO_KEYS = {"content", "model", "model_strict", "scale", "texture", "mask_tape_noise", "preview_only", "skip"}
+VIDEO_KEYS = {"content", "model", "model_strict", "scale", "texture", "mask_tape_noise", "preview_only", "skip",
+              "remove_repeats", "crop_borders"}
+FRAMING_KEYS = {"remove_repeats", "crop_borders"}      # single videos only (a series is decided as one)
+TRIAL_KEYS = {"content", "model", "scale", "texture", "remove_repeats", "crop_borders"}
+TRIAL_RECIPES = (2, 4)         # recipes compared in one trial
+REVIEW_VERDICTS = ("good", "acceptable", "redo")
 PHOTO_KEYS = {"deblur", "skip"}
 DONE = ("delivered", "kept_original", "partly_delivered", "skipped", "preview_done")
 
 
 # ----------------------------------------------------------------------------- finding the work
-OWN_FOLDERS = {"work", "attempts", "rounds", "sheets", "comparison", "previews", "deblend_trials", "survey", "items"}
+OWN_FOLDERS = {"work", "attempts", "rounds", "sheets", "comparison", "previews", "deblend_trials", "survey", "items",
+               "trials"}
 
 
 def _results_folder(d: Path) -> bool:
@@ -122,7 +129,16 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
     sheet = pipeline_video.frames_sheet(src, out / "survey" / f"{item_id}_frames.jpg")
     pre = pipeline_video.plan_prepass(prof)[1]
     anime = "anime_like" in prof.flags
+    findings = _findings(prof)
+    try:
+        from .report import closeups
+        close = closeups.sheet(src, out / "survey" / f"{item_id}_closeups.jpg", borders=prof.borders,
+                               repeats=prof.repeats, title=f"{item_id}  {src.name}")
+    except Exception as e:  # noqa: BLE001  (an aid for the decision; the survey goes on without it)
+        close = None
+        log(f"   {item_id}: close-ups failed ({e})")
     it = {"id": item_id, "source": str(src), "profile_flags": prof.flags,
+          "findings": findings or None, "closeups": str(close) if close else None,
           "size": guide["signals"]["size"], "faces": guide["signals"]["faces"],
           "prepass": pre or None, "tape_advice": pipeline_video.tape_notes(prof) or None,
           "frames_sheet": str(sheet) if sheet else None,
@@ -130,12 +146,35 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
           "est_hours": {m["model"]: m["est_hours"] for m in guide["models"] if m.get("est_hours") is not None},
           # the probe's reading stands until someone looks at the sheet (it often reads old cartoons as real footage)
           "decision": {"content": "anime" if anime else "auto", "model": guide["suggested"], "model_strict": False,
-                       "scale": None, "texture": None, "mask_tape_noise": False, "preview_only": False, "skip": False},
+                       "scale": None, "texture": None, "mask_tape_noise": False, "preview_only": False, "skip": False,
+                       "remove_repeats": False, "crop_borders": False},
           "decided_by": "analysis", "reasons": list(guide["why"]),
-          "needs_look": "confirm on the contact sheet: drawn (anime) or real footage", "state": "pending"}
+          "needs_look": "confirm on the contact sheet: drawn (anime) or real footage"
+                        + ("; judge each finding on the close-ups" if findings else ""), "state": "pending"}
     log(f"   {item_id}: {src.name}: {it['size']}; flags {', '.join(prof.flags) or 'none'}; "
         f"suggested {guide['suggested']}")
     return it
+
+
+def _findings(prof) -> list[dict]:
+    """Defects that are measured but corrected only on a decision, in plain words, with the decision that
+    corrects each. Whoever decides looks at the close-ups first: the measurement cannot tell a bar from a dark
+    edge, nor padding from a held drawing."""
+    out = []
+    b, r = prof.borders or {}, prof.repeats or {}
+    if "black_borders" in prof.flags:
+        out.append({"finding": "black_borders",
+                    "what": f"black bars: left {b.get('left')}, right {b.get('right')}, top {b.get('top')}, bottom "
+                            f"{b.get('bottom')} px; enlarging keeps and sharpens them",
+                    "decision": "crop_borders", "look": "the frame with the red outline: is everything outside it black?"})
+    if "padded_repeats" in prof.flags:
+        out.append({"finding": "padded_repeats",
+                    "what": f"every {r.get('cycle')}th frame is a copy of the one before ({r.get('share', 0):.0%} of "
+                            f"moving frames): a {r.get('original_fps')} fps original padded to {prof.fps:g} fps, "
+                            "which judders",
+                    "decision": "remove_repeats", "look": "the strip of consecutive frames: are the frames marked COPY "
+                                                          "the same drawing mid-movement?"})
+    return out
 
 
 def _contact_sheets(items: list[dict], out: Path) -> list[str]:
@@ -285,10 +324,11 @@ def summary(plan: dict) -> dict:
         else:
             row.update(source=it.get("source"), size=it.get("size"), faces=it.get("faces"), flags=it.get("profile_flags"),
                        prepass=it.get("prepass"), tape_advice=it.get("tape_advice"), guide=it.get("guide"),
-                       est_hours=it.get("est_hours"), needs_look=it.get("needs_look"))
+                       est_hours=it.get("est_hours"), needs_look=it.get("needs_look"),
+                       findings=it.get("findings"), closeups=it.get("closeups"))
             if it["type"] == "series":
                 row.update(episodes=it.get("episodes"))
-        for k in ("result", "error", "report", "delivered"):
+        for k in ("result", "error", "report", "delivered", "trials", "review"):
             if it.get(k) is not None:
                 row[k] = it[k]
         rows.append(row)
@@ -297,9 +337,22 @@ def summary(plan: dict) -> dict:
             "contact_sheets": plan.get("contact_sheets") or [],
             "report": plan.get("report"),
             "counts": {s: states.count(s) for s in sorted(set(map(str, states)))},
-            "next": ("LOOK at each contact sheet, correct content/model with decide_plan for any item the analysis "
-                     "got wrong (drawn vs real is the common one), then run_plan. Tell the person in a few lines "
-                     "what you decided and why.") if any(s == "pending" for s in states) else None}
+            "next": _next_step(plan, states)}
+
+
+def _next_step(plan: dict, states: list) -> str | None:
+    if any(s == "pending" for s in states):
+        return ("LOOK at each contact sheet AND each video's closeups image. Decide with decide_plan: content/model "
+                "for any item the analysis got wrong (drawn vs real is the common one), and each finding you can "
+                "confirm by eye (crop_borders, remove_repeats). When two or more recipes are plausible and you cannot "
+                "tell which will look better, compare them first with try_recipes and look at its sheet. Then "
+                "run_plan. Tell the person in a few lines what you decided and why.")
+    unseen = [it["id"] for it in plan["items"] if it["type"] == "video" and it.get("delivered") and not it.get("review")]
+    if unseen:
+        return (f"LOOK at the before/after sheets of {', '.join(unseen)} (result.sheets) and record what you see with "
+                "review_results: good, acceptable (say what is not ideal), or redo (then change the decision with "
+                "decide_plan and run_plan again). The guard passed these; your review is about how they look.")
+    return None
 
 
 # ----------------------------------------------------------------------------- decide
@@ -319,7 +372,8 @@ def _decide(out: Path, decisions: dict[str, dict], by: str) -> dict:
         it = index[item_id]
         d = dict(d)
         reason = d.pop("reason", None)
-        allowed = PHOTO_KEYS if it["type"] == "photos" else VIDEO_KEYS - ({"preview_only"} if it["type"] == "series" else set())
+        allowed = PHOTO_KEYS if it["type"] == "photos" else VIDEO_KEYS - (
+            {"preview_only"} | FRAMING_KEYS if it["type"] == "series" else set())
         bad = set(d) - allowed
         if bad:
             raise ValueError(f"{item_id}: unknown decision(s) {sorted(bad)}; allowed: {sorted(allowed)}")
@@ -338,6 +392,10 @@ def _decide(out: Path, decisions: dict[str, dict], by: str) -> dict:
                 d["model"] = pick
                 it.setdefault("reasons", []).append(f"content set to {d['content']}: model {pick} from the guide")
         it["decision"].update(d)
+        if any(k in d for k in ("content", "model", "scale", "texture") + tuple(FRAMING_KEYS)) and it.get("review"):
+            it.pop("review")                            # a new recipe: the old look no longer stands
+            if it.get("state") == "delivered":
+                it["state"] = "pending"
         it["decided_by"] = by
         it.pop("needs_look", None)
         if reason:
@@ -349,7 +407,7 @@ def _decide(out: Path, decisions: dict[str, dict], by: str) -> dict:
 
 
 NUMBER_KEYS = {"scale", "texture"}
-FLAG_KEYS = {"model_strict", "mask_tape_noise", "preview_only", "skip", "deblur"}
+FLAG_KEYS = {"model_strict", "mask_tape_noise", "preview_only", "skip", "deblur", "remove_repeats", "crop_borders"}
 
 
 def _typed(item_id: str, d: dict) -> dict:
@@ -413,14 +471,16 @@ def _run_video(it: dict, out: Path, log) -> None:
     rec = pipeline_video.restore_video(src, dst, preview_only=bool(d.get("preview_only")), scale=d.get("scale"),
                                        content=d.get("content") or "auto", model=d.get("model"),
                                        model_strict=bool(d.get("model_strict")),
-                                       mask_tape_noise=bool(d.get("mask_tape_noise")), log=log)
+                                       mask_tape_noise=bool(d.get("mask_tape_noise")),
+                                       remove_repeats=bool(d.get("remove_repeats")),
+                                       crop_borders=bool(d.get("crop_borders")), log=log)
     r = rec.to_dict()
     dst.mkdir(parents=True, exist_ok=True)
     (dst / "record.json").write_text(json.dumps(r, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     page = compare.video_page(r, dst / "report.html")
     gates = {k: g.get("status") for k, g in (r.get("final_gates") or {}).items()}
     it.update(result={"chosen": r.get("chosen"), "passed": r.get("passed"), "notes": r.get("notes"),
-                      "warnings": [k for k, s in gates.items() if s == "warn"]},
+                      "warnings": [k for k, s in gates.items() if s == "warn"], "sheets": r.get("sheets") or []},
               delivered=r.get("delivered"), report=str(page),
               state="delivered" if r.get("delivered") else ("preview_done" if d.get("preview_only") and r.get("chosen")
                                                             else "kept_original"))
@@ -491,6 +551,126 @@ def run(out: Path, log: Callable[[str], None] = print) -> dict:
     return plan
 
 
+# ----------------------------------------------------------------------------- recipe trials
+def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], None] = print) -> dict:
+    """Run the video's guarded previews once per recipe and lay the results side by side for a look.
+    recipes: 2 to 4 dicts with any of content, model, scale, texture, remove_repeats, crop_borders (the rest comes
+    from the item's current decision) and an optional name. A recipe's model is the only candidate of its column,
+    so the sheet shows that model or says the guard rejected it. Nothing is delivered; the plan keeps the outcome
+    under the item's `trials` for decide_plan to act on."""
+    from . import pipeline_video
+    from . import texture as texture_pass
+    from .report import closeups
+
+    plan = load(out)
+    out = Path(plan["out"])
+    it = next((x for x in plan["items"] if x["id"] == item_id), None)
+    if it is None or it["type"] not in ("video", "series"):
+        raise ValueError(f"no video item {item_id!r} in the plan")
+    if not TRIAL_RECIPES[0] <= len(recipes) <= TRIAL_RECIPES[1]:
+        raise ValueError(f"give {TRIAL_RECIPES[0]} to {TRIAL_RECIPES[1]} recipes to compare")
+    allowed = TRIAL_KEYS - (FRAMING_KEYS if it["type"] == "series" else set())
+    typed = []
+    for n, r in enumerate(recipes, 1):
+        r = dict(r)
+        name = str(r.pop("name", "") or f"recipe {n}")
+        bad = set(r) - allowed
+        if bad:
+            raise ValueError(f"recipe {n}: unknown key(s) {sorted(bad)}; allowed: {sorted(allowed)} and name")
+        r = _typed(f"recipe {n}", r)
+        if r.get("model") is not None and r["model"] not in config.VIDEO_MODEL_CHOICES:
+            raise ValueError(f"recipe {n}: model must be one of {config.VIDEO_MODEL_CHOICES}")
+        if r.get("texture") is not None and not 0 <= float(r["texture"]) <= 1:
+            raise ValueError(f"recipe {n}: texture must be between 0 and 1")
+        typed.append((name, r))
+    src = Path(it.get("analysed_episode") or it["source"])
+    tdir = out / "trials" / item_id
+    run_dir = tdir / "run"
+    columns: list[tuple[str, list]] = []
+    results = []
+    half = pipeline_video.PREVIEW_SECONDS / 2
+    for n, (name, r) in enumerate(typed, 1):
+        d = {**it["decision"], **r}
+        log(f"{item_id} trial {n}/{len(typed)} {name}: {json.dumps(r, default=str)}")
+        rec = pipeline_video.restore_video(src, run_dir, preview_only=True, scale=d.get("scale"),
+                                           content=d.get("content") or "auto", model=d.get("model"),
+                                           model_strict=bool(d.get("model")),
+                                           mask_tape_noise=bool(d.get("mask_tape_noise")),
+                                           remove_repeats=bool(d.get("remove_repeats")),
+                                           crop_borders=bool(d.get("crop_borders")), log=log)
+        att = rec.attempts[-1] if rec.attempts else None
+        work = run_dir / "work" / pipeline_video.work_key(run_dir, src)
+        strength = config.TEXTURE_STRENGTH if d.get("texture") is None else float(d["texture"])
+        shots: list = []
+        sources: list = []
+        for i in range(att.previews if att else 0):
+            clip = work / "previews" / f"src_{i}.mkv"
+            made = work / "previews" / "out" / f"{att.label.replace(' ', '_')}_{i}.mkv"
+            shown = made
+            if made.exists() and strength > 0:
+                tex = tdir / f"r{n}_{i}.mkv"
+                tdir.mkdir(parents=True, exist_ok=True)
+                if texture_pass.apply(clip, made, tex, strength, "ffv1").ok:
+                    shown = tex
+            fr = closeups.frames_at(shown, half) if shown.exists() else []
+            shots.append(fr[0] if fr else None)
+            fr = closeups.frames_at(clip, half) if clip.exists() else []
+            sources.append(fr[0] if fr else None)
+        for f in tdir.glob(f"r{n}_*.mkv"):
+            f.unlink(missing_ok=True)
+        if not columns:
+            columns.append(("source", sources))
+        passed = bool(att and att.passed_previews == att.previews and att.previews)
+        failed = sorted({g for f in (att.failed if att else []) for g in f})
+        columns.append((f"{n} {name}" + ("" if passed else " (GUARD REJECTED)"), shots))
+        results.append({"n": n, "name": name, "recipe": r, "model": att.label if att else None,
+                        "guard_passed": passed, "failed_gates": failed, "vmaf": att.vmaf if att else [],
+                        "notes": [x for x in rec.notes if "preview only" not in x]})
+        log(f"{item_id} trial {n} {name}: {'passed the guard' if passed else 'REJECTED by the guard: ' + ', '.join(failed)}")
+    sheet = closeups.recipe_sheet(columns, tdir / "recipes.jpg")
+    shutil.rmtree(run_dir, ignore_errors=True)              # previews and passes of the trial: several GB
+    outcome = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "sheet": str(sheet) if sheet else None, "recipes": results,
+               "next": "LOOK at the sheet (first column is the source, then one column per recipe, one row per "
+                       "preview). Choose only among recipes the guard passed, say why, and set it with decide_plan."}
+    path = out / "plan.json"
+    with statefile.locked(path):
+        disk = statefile.read_json(path)
+        for x in disk.get("items", []):
+            if x.get("id") == item_id:
+                x["trials"] = outcome
+        statefile.write_json(path, disk)
+    return disk
+
+
+# ----------------------------------------------------------------------------- review
+def review(out: Path, reviews: dict[str, dict], by: str = "claude") -> dict:
+    """Record what the delivered results look like: {item_id: {verdict: good | acceptable | redo, notes: "..."}}.
+    The guard decides whether a result is faithful; this is the look that follows, shown in the report. `redo`
+    sets the item back to pending (change its decision with decide_plan, then run the plan again)."""
+    path = plan_path(out)
+    with statefile.locked(path):
+        plan = load(out)
+        index = {it["id"]: it for it in plan["items"]}
+        for item_id, r in reviews.items():
+            if item_id not in index:
+                raise ValueError(f"no item {item_id!r} in the plan (items: {', '.join(index)})")
+            verdict, notes = str(r.get("verdict", "")).strip().lower(), str(r.get("notes", "")).strip()
+            if verdict not in REVIEW_VERDICTS:
+                raise ValueError(f"{item_id}: verdict must be one of {REVIEW_VERDICTS}")
+            if not notes:
+                raise ValueError(f"{item_id}: say what you saw (notes)")
+            it = index[item_id]
+            if not it.get("delivered") and it.get("state") not in ("delivered", "partly_delivered"):
+                raise ValueError(f"{item_id}: nothing was delivered to review")
+            it["review"] = {"verdict": verdict, "notes": notes, "by": by, "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+            if verdict == "redo":
+                it["state"] = "pending"
+        if plan.get("report"):
+            plan["report"] = str(write_report(plan))
+        save(plan)
+    return plan
+
+
 # ----------------------------------------------------------------------------- one report
 _STATE_TEXT = {"delivered": "Delivered", "partly_delivered": "Partly delivered", "kept_original": "Original kept",
                "skipped": "Skipped", "error": "Error", "pending": "Not run yet", "running": "Stopped mid-run",
@@ -526,7 +706,9 @@ def write_report(plan: dict) -> Path:
                 f"content {d.get('content')}", f"model {d.get('model')}" if d.get("model") else None,
                 f"x{d['scale']:g}" if d.get("scale") else "automatic size",
                 f"texture {d['texture']:g}" if d.get("texture") is not None else None,
-                "tape noise masked" if d.get("mask_tape_noise") else None) if x)
+                "tape noise masked" if d.get("mask_tape_noise") else None,
+                "copied frames removed" if d.get("remove_repeats") else None,
+                "black borders cut" if d.get("crop_borders") else None) if x)
             r = it.get("result") or {}
             if it["type"] == "series":
                 res = f"{r.get('delivered', 0)} of {r.get('total', 0)} episodes delivered"
@@ -538,12 +720,22 @@ def write_report(plan: dict) -> Path:
         notes = "".join(f"<li>{e(str(x))}</li>" for x in ((it.get("result") or {}).get("notes") or []))
         tape = "".join(f"<li>{e(str(x))}</li>" for x in (it.get("tape_advice") or []))
         link = f'<a href="{e(rel(it.get("report")))}">detailed report</a>' if it.get("report") else ""
+        found = "".join(f"<li>{e(str(x.get('what')))}</li>" for x in (it.get("findings") or []))
+        tr = it.get("trials") or {}
+        tried = "".join(
+            f"<li>{e(str(x.get('name')))} ({e(str(x.get('model')))}): "
+            f"{'passed the guard' if x.get('guard_passed') else 'rejected by the guard: ' + e(', '.join(x.get('failed_gates') or []))}</li>"
+            for x in tr.get("recipes") or [])
+        rv = it.get("review") or {}
         rows.append(f"""<section class="{e(state)}"><h2>{e(it['id'])} · {e(what)}</h2>
 <p class="st">{e(_STATE_TEXT.get(state, state))}{' · ' + e(res) if res else ''}{' · ' + str(it['minutes']) + ' min' if it.get('minutes') else ''} {link}</p>
 {f'<p class="err">{e(it["error"])}</p>' if it.get('error') else ''}
 <p><b>Decision</b> ({e(str(it.get('decided_by', 'analysis')))}): {e(dec)}</p>
 {f'<p>Classical pre-pass planned: {e(it["prepass"])}</p>' if it.get('prepass') else ''}
 {f'<ul class="why">{why}</ul>' if why else ''}{f'<p><b>What happened</b></p><ul>{notes}</ul>' if notes else ''}
+{f'<p><b>Found by the analysis (corrected only when decided)</b></p><ul>{found}</ul>' if found else ''}
+{f'<p><b>Recipes compared</b> (<a href="{e(rel(tr.get("sheet")))}">side by side</a>)</p><ul>{tried}</ul>' if tried else ''}
+{f'<p><b>Review of the result</b> ({e(str(rv.get("by")))}): {e(str(rv.get("verdict")))}. {e(str(rv.get("notes")))}</p>' if rv else ''}
 {f'<p><b>Tape defects (cannot be fixed in software)</b></p><ul>{tape}</ul>' if tape else ''}</section>""")
     states = [it.get("state", "pending") for it in plan["items"]]
     ok = sum(s in ("delivered", "partly_delivered") for s in states)
