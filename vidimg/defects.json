@@ -90,5 +90,9 @@
   "measured_by": "clipped_highlights",
   "repairable": false,
   "why": "the detail is not in the file"
+ },
+ "low_frame_rate": {
+  "looks_like": "jerky motion: far fewer pictures per second than the original had (a 10 fps copy)",
+  "measured_by": null
  }
 }

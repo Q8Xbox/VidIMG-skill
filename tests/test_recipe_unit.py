@@ -391,3 +391,68 @@ def test_a_moving_step_gets_its_own_pass_and_its_own_check(monkeypatch, tmp_path
     assert pv.run_scripted(src, tmp_path / "w", [(st, library.resolve(st, "strong"))], 1, log=lambda m: None)[0]
     assert pv.run_scripted(src, tmp_path / "w", [(dh, library.resolve(dh))], 2, log=lambda m: None)[0]
     assert used[0] == ("moved", {"max_shift": 16.0}) and used[1][0] == "guard"
+
+
+# ----------------------------------------------------------------------------- created frames, on request only
+def test_interpolation_is_asked_for_in_the_recipe_and_said_plainly():
+    got, advice = recipe.validate({"faces": "drawn", "interpolate": 3})
+    assert got["interpolate"] == 3 and any("2 of every 3 frames" in a and "created" in a for a in advice)
+    assert recipe.validate({"faces": "drawn"})[0]["interpolate"] is None
+    assert "x3 frame-rate copy" in recipe.describe(got)
+    assert recipe.from_decision({"content": "anime"}, [])["interpolate"] is None      # never from the older settings
+    for bad in (1, 5, 2.5, True, "2"):
+        with pytest.raises(ValueError):
+            recipe.validate({"faces": "drawn", "interpolate": bad})
+    with pytest.raises(ValueError):                                                   # it is not a step
+        recipe.validate({"faces": "drawn", "steps": ["interpolate"]})
+    blocks = library.load(Path("no/such"))[0]
+    assert blocks["interpolate"].kind == "finish" and "ONLY when the person asks" in blocks["interpolate"].when
+
+
+def test_the_frame_rate_copy_is_a_second_file_and_kept_only_if_the_originals_survive(monkeypatch, tmp_path):
+    from vidimg.guard import Gate, GuardReport
+
+    faithful = tmp_path / "clip_restored.mp4"
+    faithful.write_bytes(b"faithful")
+    calls = {}
+
+    def rife(src, dst, processor, **kw):
+        calls.update(processor=processor, **kw)
+        Path(dst).write_bytes(b"smooth")
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr(pv.video2x, "run", rife)
+    fed = []
+    monkeypatch.setattr(pv, "lossless_copy", lambda a, b: fed.append((Path(a).name, Path(b).name)) or Path(b).write_bytes(b"f") and None)
+    monkeypatch.setattr(pv.media, "probe", lambda p, exact=False: {"fps": 10.0, "frames": 358 if "fps" in Path(p).name else 120})
+    monkeypatch.setattr(pv.media, "nvenc", lambda: False)
+    for name in ("fix_av_offset", "fix_aspect"):
+        monkeypatch.setattr(pv.media, name, lambda a, b: None)
+    monkeypatch.setattr(pv, "carry_side_streams", lambda a, b: None)
+    seen = []
+    monkeypatch.setattr(pv, "verify_video", lambda a, b, **k: seen.append(k) or GuardReport(True, []))
+
+    def record():
+        return pv.VideoRecord("C:/in/clip.mp4", {}, "", delivered=str(faithful), passed=True)
+
+    rec = pv.add_interpolation(record(), {"interpolate": 3}, tmp_path / "work", "hevc10", True, log=lambda m: None)
+    copy = tmp_path / "clip_restored_30fps.mp4"
+    assert rec.interpolated == str(copy) and copy.read_bytes() == b"smooth" and faithful.read_bytes() == b"faithful"
+    assert rec.delivered == str(faithful)                                   # the faithful file stays the delivered one
+    assert calls["processor"] == "rife" and calls["fps_multiplier"] == 3 and calls["content"] == "anime"
+    assert seen == [{"interpolated": True, "drawn_faces": True}]
+    assert fed == [("clip_restored.mp4", "feed.mkv")]                       # the interpolator reads a lossless copy
+    assert "238 of its 358 frames were created" in rec.notes[-1] and "not original picture" in rec.notes[-1]
+    # not asked for, or nothing delivered: nothing happens
+    assert pv.add_interpolation(record(), {"interpolate": None}, tmp_path / "w2", "hevc10", True).interpolated is None
+    none = pv.VideoRecord("C:/in/clip.mp4", {}, "")
+    assert pv.add_interpolation(none, {"interpolate": 2}, tmp_path / "w3", "hevc10", True).interpolated is None
+    # the guard finds the originals changed: the copy is not kept
+    copy.unlink()
+    monkeypatch.setattr(pv, "verify_video", lambda a, b, **k: GuardReport(False, [Gate("backprojection", "fail", 0.5, 0.97, "")]))
+    rec = pv.add_interpolation(record(), {"interpolate": 3}, tmp_path / "work", "hevc10", True, log=lambda m: None)
+    assert rec.interpolated is None and not copy.exists() and "not kept" in rec.notes[-1]
+    # a rate that would pass 60 fps is refused
+    monkeypatch.setattr(pv.media, "probe", lambda p, exact=False: {"fps": 29.97, "frames": 100})
+    rec = pv.add_interpolation(record(), {"interpolate": 3}, tmp_path / "work", "hevc10", True, log=lambda m: None)
+    assert rec.interpolated is None and "above 60 fps" in rec.notes[-1]

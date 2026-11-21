@@ -537,7 +537,8 @@ def _run_video(it: dict, out: Path, log) -> None:
     page = compare.video_page(r, dst / "report.html")
     gates = {k: g.get("status") for k, g in (r.get("final_gates") or {}).items()}
     it.update(result={"chosen": r.get("chosen"), "passed": r.get("passed"), "notes": r.get("notes"),
-                      "warnings": [k for k, s in gates.items() if s == "warn"], "sheets": r.get("sheets") or []},
+                      "warnings": [k for k, s in gates.items() if s == "warn"], "sheets": r.get("sheets") or [],
+                      **({"interpolated": r["interpolated"]} if r.get("interpolated") else {})},
               delivered=r.get("delivered"), report=str(page),
               state="delivered" if r.get("delivered") else ("preview_done" if d.get("preview_only") and r.get("chosen")
                                                             else "kept_original"))
@@ -618,6 +619,7 @@ def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], Non
     under the item's `trials` for decide_plan to act on."""
     from . import pipeline_video
     from . import texture as texture_pass
+    from .media import probe as media_probe
     from .report import closeups
 
     plan = load(out)
@@ -682,9 +684,11 @@ def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], Non
                 tdir.mkdir(parents=True, exist_ok=True)
                 if texture_pass.apply(clip, made, tex, strength, "ffv1").ok:
                     shown = tex
-            fr = closeups.frames_at(shown, half) if shown.exists() else []
+            # the same frame NUMBER of the preview and of its source clip (they hold the same frames)
+            middle = (media_probe(clip, exact=True)["frames"] // 2) if clip.exists() else 0
+            fr = closeups.frames_at(shown, half, index=middle) if shown.exists() else []
             shots.append(fr[0] if fr else None)
-            fr = closeups.frames_at(clip, half) if clip.exists() else []
+            fr = closeups.frames_at(clip, half, index=middle) if clip.exists() else []
             sources.append(fr[0] if fr else None)
         for f in tdir.glob(f"r{n}_*.mkv"):
             f.unlink(missing_ok=True)

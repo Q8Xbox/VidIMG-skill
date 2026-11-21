@@ -1,0 +1,16 @@
+{
+ "name": "interpolate",
+ "kind": "finish",
+ "engine": "builtin",
+ "runner": "interpolate",
+ "addresses": [
+  "low_frame_rate"
+ ],
+ "what": "writes a SECOND file at 2, 3 or 4 times the frame rate, with frames created between the originals (RIFE). The faithful file is delivered as always; in the copy the original frames are unchanged and the rest is invented",
+ "when": "ONLY when the person asks for smoother motion or for the missing frames of a low-frame-rate source. Set the recipe's `interpolate` (2, 3 or 4), never as a step. Say plainly how many frames are created",
+ "softens": "created frames morph fast movement instead of drawing it, and repeat ghosting when a source frame is itself a blend; no check can vouch for them",
+ "tried_on": [
+  "owner cartoon at 10 fps, x3 on a 12 s cut: slow movement convincing, fast movement morphed, a ghosted source frame spread into its neighbours. The anime RIFE model did not run; the general one did"
+ ],
+ "version": 1
+}

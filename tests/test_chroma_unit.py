@@ -70,6 +70,14 @@ def test_decision_and_correction():
     # one plane scattered on an axis: neither plane is moved on it (no new fringes)
     st = _stats((1.7, 0.8), (1.9, 1.2), {"u": [0.36, 0.36], "v": [0.84, 0.25]})
     assert not st.is_shifted
+    # each plane on its own: both 4 px low, Cr alone 2.2 px to the right, Cb about in place (an owner cartoon)
+    st = _stats((0.59, 3.97), (2.21, 4.09), {"u": [0.59, 0.44], "v": [0.48, 0.49]})
+    assert st.is_shifted and st.correction() == {"u": [0.0, -4.0], "v": [-2.25, -4.0]}
+    # ... but not when the other plane cannot be placed at all on that axis
+    assert _stats((0.2, 0.0), (2.2, 0.0), {"u": [1.4, 0.2], "v": [0.3, 0.2]}).correction() == {"u": [0.0, 0.0], "v": [0.0, 0.0]}
+    # a component far off whose frames nearly agree is worth more frames; a settled one is not
+    assert _stats((0.59, 3.97), (2.21, 4.09), {"u": [0.59, 0.44], "v": [0.57, 0.49]}).nearly()
+    assert not _stats((1.7, -0.3), (1.6, -0.3)).nearly() and not _stats((0.2, 0.0), (2.2, 0.0), {"u": [0.2, 0.2], "v": [1.6, 0.2]}).nearly()
     # interlaced: horizontal part only
     assert _stats((2.0, 2.0), (2.0, 2.0)).correction(horizontal_only=True) == {"u": [-2.0, 0.0], "v": [-2.0, 0.0]}
 

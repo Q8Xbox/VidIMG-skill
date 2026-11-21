@@ -7,7 +7,10 @@ restoration. There are no paths in the pipeline; it runs the recipe.
      "models": ["esrgan-v3", "cugan"],        tried in this order on the previews; the first the guard passes is used
      "model_strict": false,                   true: no fallback beyond the listed models
      "scale": 1 | 2 | ... | null,             1 = keep the size; null = the tool's default for the source's size
-     "texture": 0..1 | null}                  source texture put back after the model (null = default)
+     "texture": 0..1 | null,                  source texture put back after the model (null = default)
+     "interpolate": 2 | 3 | 4 | null}         ONLY when the person asks: also write a copy at that many times the frame
+                                              rate, with frames created between the originals (RIFE). The faithful
+                                              file is still delivered; the copy says what part of it is invented
 
 `faces` is a statement about the content, separate from the choice of model: routing by "anime or real" used to set
 both at once, and a cartoon kept at its own size was judged as if its faces were people's (owner sample,
@@ -22,7 +25,8 @@ from . import config, library
 
 FACES = ("drawn", "real")
 FIELD_FLAGS = {"interlaced", "telecine", "blended", "chroma_shift"}
-KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture"}
+KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpolate"}
+INTERPOLATE = (2, 3, 4)
 ANIME_MODELS = {"esrgan-v3", "cugan", "cugan-pro"}
 
 
@@ -116,8 +120,15 @@ def validate(recipe: dict, blocks: dict | None = None) -> tuple[dict, list[str]]
     texture = recipe.get("texture")
     if texture is not None and (isinstance(texture, bool) or not isinstance(texture, (int, float)) or not 0 <= texture <= 1):
         raise ValueError("texture must be between 0 and 1, or null for the default")
+    more = recipe.get("interpolate")
+    if more is not None:
+        if isinstance(more, bool) or more not in INTERPOLATE:
+            raise ValueError(f"interpolate must be one of {INTERPOLATE} (how many times the frame rate), or null")
+        warnings.append(f"interpolate x{more}: {more - 1} of every {more} frames of that file will be created, not "
+                        "original picture; it is written beside the faithful file, only because the person asked")
     out = {"faces": faces, "steps": steps, "models": models, "model_strict": bool(recipe.get("model_strict")),
-           "scale": scale, "texture": None if texture is None else float(texture)}
+           "scale": scale, "texture": None if texture is None else float(texture),
+           "interpolate": None if more is None else int(more)}
     return out, warnings
 
 
@@ -144,7 +155,8 @@ def from_decision(d: dict, flags: list[str] | set[str]) -> dict:
     if faces == "real" and model in ANIME_MODELS:
         model = None                                   # an anime model picked before the content was called real
     return {"faces": faces, "steps": steps, "models": [model] if model in config.VIDEO_MODEL_CHOICES else [],
-            "model_strict": bool(d.get("model_strict")), "scale": d.get("scale"), "texture": d.get("texture")}
+            "model_strict": bool(d.get("model_strict")), "scale": d.get("scale"), "texture": d.get("texture"),
+            "interpolate": None}
 
 
 def describe(recipe: dict) -> str:
@@ -158,4 +170,6 @@ def describe(recipe: dict) -> str:
     parts.append("own size" if recipe.get("scale") == 1 else (f"x{recipe['scale']:g}" if recipe.get("scale") else "default size"))
     if recipe.get("texture") is not None:
         parts.append(f"texture {recipe['texture']:g}")
+    if recipe.get("interpolate"):
+        parts.append(f"plus a x{recipe['interpolate']} frame-rate copy (created frames)")
     return "; ".join(parts)

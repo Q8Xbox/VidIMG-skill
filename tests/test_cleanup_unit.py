@@ -234,3 +234,38 @@ def test_a_moved_picture_passes_only_when_it_is_the_same_picture_and_steadier(tm
     soft = write(tmp_path / "soft.mkv", [still] * 50, vf="gblur=sigma=2")
     assert "picture" in verify_moved(shaky, soft, max_shift=4).failed()                # steadier, but not the same picture
     assert not verify_video(shaky, steady).passed                                      # why this needed its own check
+
+
+@needs_ffmpeg
+def test_the_guard_finds_the_original_frames_in_an_interpolated_file(tmp_path):
+    import cv2
+    import numpy as np
+    from vidimg.guard.video import verify_video
+
+    rng = np.random.default_rng(9)
+    frames = []
+    for k in range(40):                                                    # a changing, colourless picture
+        base = cv2.GaussianBlur(cv2.resize((rng.random((12, 16)) * 255).astype(np.uint8), (320, 240),
+                                           interpolation=cv2.INTER_CUBIC), (0, 0), 3)
+        frames.append(cv2.cvtColor(base, cv2.COLOR_GRAY2BGR))
+
+    def write(path, seq, rate):
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
+                        "-s", "320x240", "-r", str(rate), "-i", "-", "-c:v", "ffv1", "-pix_fmt", "yuv420p", str(path)],
+                       input=b"".join(f.tobytes() for f in seq), check=True, capture_output=True)
+        return path
+
+    src = write(tmp_path / "src.mkv", frames, 10)
+    # x3 the way RIFE writes it: 3n - 2 frames, the originals at every third place, something else in between
+    made = []
+    for a, b in zip(frames, frames[1:]):
+        made += [a, cv2.addWeighted(a, 0.67, b, 0.33, 0), cv2.addWeighted(a, 0.33, b, 0.67, 0)]
+    smooth = write(tmp_path / "smooth.mkv", made + [frames[-1]], 30)
+    rep = verify_video(src, smooth, interpolated=True, samples=6)
+    picture = ("backprojection", "color", "coverage")
+    assert not [g.name for g in rep.gates if g.status == "fail" and g.name in picture], \
+        [(g.name, g.value, g.detail) for g in rep.gates if g.status == "fail"]
+    # the same file one frame late: what sits at the originals' places are created frames, and the guard says so
+    shifted = write(tmp_path / "shifted.mkv", made[1:] + [frames[-1], frames[-1]], 30)
+    bad = verify_video(src, shifted, interpolated=True, samples=6)
+    assert [g.name for g in bad.gates if g.status == "fail" and g.name in picture]
