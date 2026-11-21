@@ -606,6 +606,81 @@ def verify_derepeat(src: Path, dst: Path, *, in_fps, out_fps, windows: int = 4, 
     return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
 
 
+# ----------------------------------------------------------------------------- composed clean-up
+SPANS_LEFT = 0.25               # share of a span's interlaced frames that may still read interlaced afterwards
+SPANS_SAME_PSNR = 50.0          # dB: frames outside the spans must be untouched. Not 60: MPEG-2 decoders round
+                                # their inverse transform differently (ffmpeg here, L-SMASH in the pass: 55.5 dB on
+                                # an untouched DVD frame, measured); a deinterlaced frame scores about 40 or less
+
+
+def verify_spans(src: Path, dst: Path, *, spans: list, frames: int = 16) -> GuardReport:
+    """Span deinterlacing against its input: same frames, duration, audio, shape; frames outside the spans are
+    the input's, untouched; inside the spans the combing is gone."""
+    from fractions import Fraction
+
+    from ..probe import combing
+
+    src, dst = Path(src), Path(dst)
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    gates = _rate_gates(a, b, Fraction(1), Fraction(1))
+    inside = {i for s, e in spans for i in range(s, e + 1)}
+    total = min(a["frames"], b["frames"])
+    outside = [i for i in (int(total * (k + 0.5) / (frames * 3)) for k in range(frames * 3)) if i not in inside][:frames]
+    worst = None
+    with tempfile.TemporaryDirectory(prefix="vidimg_span_") as tmp:
+        fa = _frames_by_index(src, outside, Path(tmp), "s", pre_vf="extractplanes=y")
+        fb = _frames_by_index(dst, outside, Path(tmp), "d", pre_vf="extractplanes=y")
+        for i in outside:
+            if i not in fa or i not in fb:
+                continue
+            x, y = _luma8(fa[i]), _luma8(fb[i])
+            if x is None or y is None or x.shape != y.shape:
+                continue
+            p = float(10 * np.log10(255 ** 2 / max(float(np.mean((x - y) ** 2)), 1e-6)))
+            worst = p if worst is None else min(worst, p)
+    gates.append(Gate("outside", "pass" if worst is not None and worst >= SPANS_SAME_PSNR else "fail",
+                      None if worst is None else round(worst, 1), SPANS_SAME_PSNR,
+                      "frames outside the spans against the input (lowest of the sampled frames)"))
+    before, after = combing.read_kinds(src), combing.read_kinds(dst)
+    hit = lambda kinds: sum(1 for i in inside if i < len(kinds) and kinds[i] in ("tff", "bff"))  # noqa: E731
+    nb, na = hit(before), hit(after)
+    left = na / nb if nb else 1.0
+    gates.append(Gate("combing", "pass" if nb and left <= SPANS_LEFT else "fail", round(left, 3), SPANS_LEFT,
+                      f"interlaced frames inside the spans: {nb} before, {na} after"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"outside": "frames outside the spans changed: keep the input",
+            "combing": "the spans still read interlaced: keep the input"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
+def block_level(path: Path, seconds: float = 60.0) -> float | None:
+    """ffmpeg blockdetect's mean over the middle of the video (higher = more visible 8x8 block edges)."""
+    info = media.probe(path)
+    start = max(0.0, (info["duration"] or 0) / 2 - seconds / 2)
+    cp = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-nostdin", "-ss", f"{start:.2f}", "-t", f"{seconds:g}",
+                         "-i", str(path), "-map", "0:v:0", "-vf", "blockdetect", "-an", "-f", "null", "-"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+                        timeout=900)
+    found = re.findall(r"block mean:\s*([0-9.]+)", cp.stderr)
+    return float(found[-1]) if found else None
+
+
+def verify_cleanup(src: Path, dst: Path, *, deblocked: bool = False, drawn_faces: bool = False) -> GuardReport:
+    """A clean-up pass (deblock, dehalo) against its input: every gate of the video guard (the result is still
+    this video: structure, colour, faces, no added flicker), and a filter that was asked to remove blocks must
+    have removed some."""
+    rep = verify_video(src, dst, drawn_faces=drawn_faces)
+    gates = list(rep.gates)
+    if deblocked:
+        before, after = block_level(src), block_level(dst)
+        ok = before is not None and after is not None and after < before
+        gates.append(Gate("blocks", "pass" if ok else "fail", after, before,
+                          f"block edges {before} before, {after} after"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    return GuardReport(not failed, gates, list(rep.suggestions) + (
+        ["deblocking removed no block edges: keep the input"] if "blocks" in failed else []), False)
+
+
 # ----------------------------------------------------------------------------- black borders cropped
 CROP_SAME_PSNR = 60.0           # dB: the picture inside the crop must be untouched
 CROP_BLACK_LEVEL = 40           # 8-bit luma: 95 % of what was cut away lies below this ...

@@ -8,7 +8,9 @@ Use the restore-media skill and its automatic flow. Restore: $ARGUMENTS
    batch, each single video, each numbered series) with a decision already filled in, and `contact_sheets`.
 2. Open every contact sheet image and every video's `closeups` image and look. Judge each `findings` entry on
    the close-ups (`crop_borders` when only black lies outside the red outline, `remove_repeats` when the frames
-   marked COPY are padding, not held drawings). When a look must settle between recipes, compare them with
+   marked COPY are padding, not held drawings, `filters: ["deinterlace_scenes"]` when the comb close-ups show
+   teeth on moving edges) and compose the clean-up the line close-ups call for (`filters` with `deblock` or
+   `dehalo` at the mildest strength that removes the defect). When a look must settle between recipes, compare them with
    `try_recipes` first. For each video and series item decide drawn (anime) or real footage,
    and whether another model fits better (`guide` shows the pick for either reading; realistic drawn faces:
    cugan-pro). Send all corrections in one `decide_plan(plan, {...})` call, confirming every video item and giving

@@ -21,6 +21,7 @@ from .. import faces
 from .. import media
 from . import blend as blend_probe
 from . import chroma as chroma_probe
+from . import combing as combing_probe
 from . import framing as framing_probe
 from . import tape as tape_probe
 from .image import anime_score, noise_sigma
@@ -49,6 +50,7 @@ class VideoProfile:
     chroma: dict = field(default_factory=dict)  # probe.chroma: colour planes displaced from the luma
     tape: dict = field(default_factory=dict)    # probe.tape: head switching, flagging, clipped highlights
     borders: dict = field(default_factory=dict)   # probe.framing: black bars at the edges
+    combing: dict = field(default_factory=dict)   # probe.combing: interlaced stretches of a progressive video
     repeats: dict = field(default_factory=dict)   # probe.framing: a slower original padded with copied frames
     noise_sigma: float = 0.0              # median over sampled frames
     faces_max: int = 0                    # most faces seen in one sampled frame
@@ -170,6 +172,12 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
             rp = framing_probe.repeats(path).to_dict()
     except Exception as e:  # noqa: BLE001  (an analysis aid; never fail the whole profile on it)
         bd = bd or {"error": f"{type(e).__name__}: {e}"}
+    cb: dict = {}
+    if inter < 0.3:        # a progressive file may still hold interlaced stretches (probe/combing.py)
+        try:
+            cb = combing_probe.analyze(path).to_dict()
+        except Exception as e:  # noqa: BLE001  (an analysis aid; never fail the whole profile on it)
+            cb = {"error": f"{type(e).__name__}: {e}"}
     frames = _sample_frames(path, info)
     face_counts, face_heights, sig = [], [], []
     for f in frames:
@@ -185,7 +193,7 @@ def analyze(path: Path, *, sample_seconds: float = 60.0) -> VideoProfile:
         bits_per_pixel=(round(bitrate * 1000 / (info["width"] * info["height"] * info["fps"]), 4)
                         if bitrate and info["width"] and info["height"] and info["fps"] else None),
         interlaced_ratio=inter, field_order=order, repeated_field_ratio=repeated,
-        blend_share=float(bl.get("share") or 0.0), blend=bl, chroma=ch, tape=tp, borders=bd, repeats=rp,
+        blend_share=float(bl.get("share") or 0.0), blend=bl, chroma=ch, tape=tp, borders=bd, repeats=rp, combing=cb,
         blockiness=_mean_metric(path, "blockdetect", r"block mean", span),
         blur=_mean_metric(path, "blurdetect", r"blur mean", span),
         scene_cuts=_scenes(path, span), duplicate_ratio=_duplicates(path, span, round(span * (info["fps"] or 0))),
@@ -224,6 +232,8 @@ def _flags(p: VideoProfile) -> list[str]:
                       ("clipped", "clipped_highlights")):
         if p.tape.get(key):
             f.append(flag)
+    if p.combing.get("is_partly_interlaced") and not ({"interlaced", "telecine", "blended"} & set(f)):
+        f.append("partly_interlaced")
     if p.borders.get("has_borders"):
         f.append("black_borders")
     if p.repeats.get("is_padded") and "blended" not in f:

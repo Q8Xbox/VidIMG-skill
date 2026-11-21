@@ -123,6 +123,13 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               `closeups` image and the finding is real there: the red outline leaves only black outside it; the
               frames marked COPY repeat a drawing in the middle of a movement. Each runs as its own checked pass
               and is dropped, with a note, if its check fails,
+      filters (videos and series): the clean-up YOU compose for this source, run before the model, from the
+              catalogue in each pending item's `filter_catalogue`: "deinterlace_scenes" (a progressive video with
+              interlaced stretches: only those are deinterlaced), {"name": "deblock", "strength": "light" | "medium" |
+              "strong"} (compression block edges), {"name": "dehalo", "strength": ...} (light halos beside dark
+              lines). Choose a filter only when the close-ups show its defect, the mildest strength that removes it,
+              and say what you saw in the reason. The tool fixes the order, checks the script, and judges each pass
+              with its guard; a pass that fails is dropped with a note. [] for none,
       skip true, reason "why you decided this" (shown in the report).
     When two or more recipes are plausible and the choice is about how the result looks, compare them with
     try_recipes first.
@@ -151,8 +158,8 @@ def try_recipes(plan: str, item_id: str, recipes: list[dict]) -> dict:
     the video's three guarded previews; the result is one image, a column per recipe beside the source, plus
     per recipe whether the guard passed it. Use it when the analysis leaves a real choice that only a look can
     settle: which model keeps the line art and the painted backgrounds best, how much source texture to return
-    (texture 1 / 0.5 / 0), with or without a framing step. recipes: [{name, content, model, scale, texture,
-    remove_repeats, crop_borders}, ...]; anything left out comes from the item's current decision. Poll
+    (texture 1 / 0.5 / 0), with or without a clean-up filter and at which strength, with or without a framing
+    step. recipes: [{name, content, model, scale, texture, filters, remove_repeats, crop_borders}, ...]; anything left out comes from the item's current decision. Poll
     job_status; then LOOK at result items[...].trials.sheet, choose only among recipes the guard passed, tell the
     person which and why, and set it with decide_plan. Nothing is delivered by a trial. A trial costs a few
     minutes per recipe (the framing passes run on the whole video), so do not use it for choices the analysis
@@ -243,7 +250,8 @@ def restore_photos(paths: list[str], out_dir: str | None = None, deblur: bool = 
 def restore_video(path: str, out_dir: str | None = None, preview_only: bool = False,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
                   engine: str | None = None, mask_tape_noise: bool = False, texture: float | None = None,
-                  model_strict: bool = False, remove_repeats: bool = False, crop_borders: bool = False) -> dict:
+                  model_strict: bool = False, remove_repeats: bool = False, crop_borders: bool = False,
+                  filters: list | None = None) -> dict:
     """Start a background job restoring one video: analyse; classical field handling first when needed
     (QTGMC for interlace, TFM+TDecimate for telecine, chroma-shift correction, sRestore for blended fields
     from a standards conversion); open-model candidates on three guarded preview
@@ -271,7 +279,13 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     padded to 29.97 with copied frames) and you agree after a look: the copies are dropped, back to the original
     rate (fewer frames, same duration and audio). crop_borders: when profile.borders shows black bars and they
     are bars, not picture: they are cut away before enlarging (a narrower frame, never stretched). Each is its own
-    checked pass; one that fails its check is skipped with a note. Returns the job; poll job_status(job_id)."""
+    checked pass; one that fails its check is skipped with a note.
+    filters: clean-up you compose for this source, run before the model: "deinterlace_scenes" (analyze_media's
+    profile.combing shows interlaced stretches), {"name": "deblock", "strength": "light|medium|strong"},
+    {"name": "dehalo", "strength": ...}; only what the frames show is needed, mildest strength first.
+    Returns the job; poll job_status(job_id)."""
+    from vidimg import cleanup
+    chosen = cleanup.parse(filters)
     src = _existing(path)
     if src.suffix.lower() not in VIDEO_EXT:
         raise ValueError(f"not a video: {src.name}")
@@ -289,7 +303,9 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
             + ([("--model" if model_strict else "--prefer"), model] if model else [])
             + (["--engine", engine] if engine else []) + (["--mask-tape-noise"] if mask_tape_noise else [])
             + (["--texture", f"{texture:g}"] if texture is not None else [])
-            + (["--remove-repeats"] if remove_repeats else []) + (["--crop-borders"] if crop_borders else []))
+            + (["--remove-repeats"] if remove_repeats else []) + (["--crop-borders"] if crop_borders else [])
+            + (["--filters", ",".join(f["name"] + (":" + f["strength"] if f.get("strength") else "") for f in chosen)]
+               if chosen else []))
     return jobs.start("restore-video", args, out, src.name)
 
 

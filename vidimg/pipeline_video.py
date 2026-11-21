@@ -22,15 +22,15 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Callable
 
-from . import config
+from . import cleanup, config
 from .adapters import avisynth as avs
 from .adapters import free_sr, video2x
 from .adapters import vapoursynth as vsb
 from . import media
 from .adapters import AdapterResult, mark_output, safe_output_dir
 from . import texture as texture_pass
-from .guard.video import (_ffmpeg, _frames_by_index, verify_chroma, verify_crop, verify_deblend, verify_derepeat,
-                          verify_mask, verify_video)
+from .guard.video import (_ffmpeg, _frames_by_index, verify_chroma, verify_cleanup, verify_crop, verify_deblend,
+                          verify_derepeat, verify_mask, verify_spans, verify_video)
 from .probe import blend as blend_probe
 from .probe import chroma as chroma_probe
 from .probe import framing as framing_probe
@@ -689,6 +689,97 @@ def run_deblend(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
     return dst, info
 
 
+# ----------------------------------------------------------------------------- composed clean-up (cleanup.py)
+def run_spans(base: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple[Path | None, dict]:
+    """Deinterlace only the measured interlaced stretches (probe/combing.py). None when it was not done or did
+    not pass its guard: the caller keeps the input."""
+    sdir = work / "spans"
+    dst, done = sdir / "spans.nut", sdir / "spans.done"
+    c = p.combing or {}
+    spans = c.get("spans") or []
+    if not spans:
+        return None, {"skipped": "no interlaced stretch was measured"}
+    frames = media.probe(base, exact=True)["frames"]
+    if frames != c.get("frames"):
+        return None, {"skipped": f"an earlier step changed the frame numbering ({c.get('frames')} -> {frames} frames)"}
+    made_by = fingerprint(base.name, base.stat().st_size, spans)
+    if dst.exists() and done.exists():
+        info = json.loads(done.read_text(encoding="utf-8"))
+        if info.get("fingerprint") == made_by:
+            log("   interlaced stretches: reusing the finished pass")
+            return dst, info | {"reused": True}
+        shutil.rmtree(sdir, ignore_errors=True)
+        shutil.rmtree(work / "chunks", ignore_errors=True)
+    ok, why = avs.available()
+    if not ok:
+        return None, {"skipped": f"AviSynth+ not available ({why}); the interlaced stretches stay"}
+    sdir.mkdir(parents=True, exist_ok=True)
+    r = avs.render(base, dst, [avs.DeinterlaceSpans(spans=spans, frames=frames, tff=bool(c.get("tff", True)))], work=sdir)
+    info: dict = {"engine": "avisynth", "spans": spans, "span_frames": c.get("span_frames"), "ok": r.ok,
+                  "error": r.error, "frames": r.details.get("frames")}
+    if not r.ok:
+        info["skipped"] = f"the pass failed: {r.error}"
+        return None, info
+    colour = media.colour_hint(base) or media.colour_hint(dst)
+    info["colour"] = media.write_colour_sidecar(dst, colour) if colour else {}
+    info["av_sync"] = media.fix_av_offset(base, dst)
+    info["aspect"] = media.fix_aspect(base, dst)
+    rep_ = verify_spans(base, dst, spans=spans)
+    info["guard"] = {g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates}
+    info["guard_passed"] = rep_.passed
+    log(f"   interlaced stretches deinterlaced ({len(spans)} spans, {c.get('span_frames')} frames): guard "
+        f"{'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if not rep_.passed:
+        info["skipped"] = f"the pass failed its guard ({', '.join(rep_.failed())}): the stretches stay as they were"
+        return None, info
+    info["fingerprint"] = made_by
+    done.write_text(json.dumps(info, default=str), encoding="utf-8")
+    return dst, info
+
+
+def run_cleanup(base: Path, work: Path, filters: list[dict], log=print, drawn: bool = False) -> tuple[Path | None, dict]:
+    """The composed picture filters (deblock, dehalo) as one pass. None when it was not done or did not pass its
+    guard: the caller keeps the input."""
+    cdir = work / "cleanup"
+    dst, done = cdir / "cleanup.nut", cdir / "cleanup.done"
+    stages = cleanup.picture_stages(filters)
+    if not stages:
+        return None, {"skipped": "no picture filter in the recipe"}
+    said = cleanup.describe([f for f in filters if f["name"] != "deinterlace_scenes"])
+    made_by = fingerprint(base.name, base.stat().st_size, [repr(s) for s in stages])
+    if dst.exists() and done.exists():
+        info = json.loads(done.read_text(encoding="utf-8"))
+        if info.get("fingerprint") == made_by:
+            log(f"   clean-up: reusing the finished pass ({said})")
+            return dst, info | {"reused": True}
+        shutil.rmtree(cdir, ignore_errors=True)
+        shutil.rmtree(work / "chunks", ignore_errors=True)
+    ok, why = avs.available()
+    if not ok:
+        return None, {"skipped": f"AviSynth+ not available ({why}); no clean-up"}
+    cdir.mkdir(parents=True, exist_ok=True)
+    r = avs.render(base, dst, stages, work=cdir)
+    info: dict = {"engine": "avisynth", "filters": said, "ok": r.ok, "error": r.error,
+                  "script": r.details.get("script"), "frames": r.details.get("frames")}
+    if not r.ok:
+        info["skipped"] = f"the pass failed: {r.error}"
+        return None, info
+    colour = media.colour_hint(base) or media.colour_hint(dst)
+    info["colour"] = media.write_colour_sidecar(dst, colour) if colour else {}
+    info["av_sync"] = media.fix_av_offset(base, dst)
+    info["aspect"] = media.fix_aspect(base, dst)
+    rep_ = verify_cleanup(base, dst, deblocked=any(isinstance(s, avs.Deblock) for s in stages), drawn_faces=drawn)
+    info["guard"] = {g.name: {"status": g.status, "value": g.value} for g in rep_.gates}
+    info["guard_passed"] = rep_.passed
+    log(f"   clean-up ({said}): guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if not rep_.passed:
+        info["skipped"] = f"the pass failed its guard ({', '.join(rep_.failed())}): no clean-up"
+        return None, info
+    info["fingerprint"] = made_by
+    done.write_text(json.dumps({k: v for k, v in info.items() if k != "script"}, default=str), encoding="utf-8")
+    return dst, info
+
+
 # ----------------------------------------------------------------------------- padded repeats, black borders
 def run_derepeat(base: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple[Path | None, dict]:
     """Drop the copied frames of a padded original (probe/framing.py) back to its own rate. None when it was not
@@ -935,7 +1026,8 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
                   on_progress: Callable[[int, int], None] | None = None, log=print,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
                   mask_tape_noise: bool = False, model_strict: bool = True, remove_repeats: bool = False,
-                  crop_borders: bool = False) -> VideoRecord:
+                  crop_borders: bool = False, filters=None) -> VideoRecord:
+    filters = cleanup.parse(filters)
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
     mark_output(out_dir)
@@ -967,7 +1059,8 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
                | ({"texture": config.TEXTURE_STRENGTH} if config.TEXTURE_STRENGTH != 1.0 else {})
                | ({"mask_tape_noise": True} if mask_tape_noise else {})
                | ({"remove_repeats": True} if remove_repeats else {})
-               | ({"crop_borders": True} if crop_borders else {}))
+               | ({"crop_borders": True} if crop_borders else {})
+               | ({"filters": cleanup.describe(filters)} if filters else {}))
     drawn = is_anime(prof, content)
     log(f"   plan: {rec.plan}")
     for n in tape_notes(prof, masked=mask_tape_noise and "head_switching" in prof.flags):
@@ -1000,6 +1093,18 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
             rec.notes.append(f"blended frames found but not removed: {d['skipped']}")
     # framing, each its own guarded pass on progressive frames: a pass that fails leaves the video as it was
     shape_ref = src
+    if cleanup.wants_spans(filters):
+        if "partly_interlaced" not in prof.flags:
+            rec.notes.append("deinterlace_scenes asked for, but no interlaced stretch was measured: nothing done")
+        else:
+            un, rec.prepass["spans"] = run_spans(base, work, prof, log)
+            d = rec.prepass["spans"]
+            if un is not None:
+                base = un
+                rec.notes.append(f"interlaced stretches deinterlaced: {len(d['spans'])} spans, {d.get('span_frames')} "
+                                 f"of {prof.combing.get('frames')} frames; every other frame is untouched")
+            else:
+                rec.notes.append(f"interlaced stretches found but not deinterlaced: {d.get('skipped')}")
     if remove_repeats:
         if "padded_repeats" not in prof.flags:
             rec.notes.append("repeat removal asked for, but no padding cycle was measured: nothing dropped")
@@ -1013,6 +1118,14 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
                                  f"{d.get('cycle')}th frame was a copy); fewer frames, same duration and audio")
             else:
                 rec.notes.append(f"copied frames found but not removed: {d.get('skipped')}")
+    if cleanup.picture_stages(filters):
+        cl, rec.prepass["cleanup"] = run_cleanup(base, work, filters, log, drawn=drawn)
+        d = rec.prepass["cleanup"]
+        if cl is not None:
+            base = cl
+            rec.notes.append(f"clean-up before the model: {d['filters']}")
+        else:
+            rec.notes.append(f"clean-up asked for but not applied: {d.get('skipped')}")
     if crop_borders:
         if "black_borders" not in prof.flags:
             rec.notes.append("border crop asked for, but no black bar was measured: nothing cut")
@@ -1171,7 +1284,7 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     return rec
 
 
-BULKY = ("chunks", "model", "previews", "deblend", "deblend_trials", "derepeat", "crop", "rejected", "prepass.nut", "prepass.nut.colour.json", "prepass.lwi",
+BULKY = ("chunks", "model", "previews", "deblend", "deblend_trials", "derepeat", "crop", "spans", "cleanup", "rejected", "prepass.nut", "prepass.nut.colour.json", "prepass.lwi",
          "cuts.json")
 
 

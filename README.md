@@ -63,6 +63,14 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   video's guarded previews and lays them side by side, so the choice between models or texture strengths is made
   by looking; only recipes the guard passed can be chosen. After the run Claude looks at the before/after sheets
   and records a review (`review_results`: good, acceptable, redo) that appears in the report.
+- **Clean-up composed per video** (`filters`, on Claude's decision, before the model; `vidimg/cleanup.py`): a
+  restorer writes a script for each source, so Claude picks from a small catalogue what the close-ups call for
+  and the tool builds, checks and guards the script. `deinterlace_scenes` deinterlaces only the interlaced
+  stretches of an otherwise progressive video (a DVD cartoon read as progressive with 4.6 % of its frames combed;
+  every frame outside the stretches is passed through untouched, and the check confirms both). `deblock` removes
+  compression block edges a model would sharpen into a grid, and `dehalo` pulls back the light rim old edge
+  enhancement left beside lines, each at light, medium or strong. The order is fixed, nothing sharpens, and a
+  pass that fails its guard is dropped with a note.
 - **Framing fixes for old cartoon transfers** (single videos, on Claude's decision, each its own checked pass):
   black bars are cut away before enlarging (`crop_borders`; lossless, even edges, pixel shape kept, and the check
   confirms that what was cut was black and the kept picture is untouched), and a slower original padded to 29.97

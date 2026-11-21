@@ -87,8 +87,20 @@ def crop_zoom(frame: np.ndarray, x: int, y: int, cell: tuple[int, int] = CELL, z
     return cv2.resize(c, (c.shape[1] * zoom, c.shape[0] * zoom), interpolation=cv2.INTER_NEAREST)
 
 
+def comb_zoom(frame: np.ndarray, cell: tuple[int, int] = CELL, zoom: int = ZOOM) -> np.ndarray:
+    """The part of a frame with the strongest line-to-line alternation (comb teeth), enlarged."""
+    g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    teeth = np.zeros_like(g)
+    teeth[1:-1] = np.abs(g[2:] - 2 * g[1:-1] + g[:-2])
+    h, w = g.shape
+    cw, ch = min(cell[0], w), min(cell[1], h)
+    e = cv2.blur(teeth, (cw, ch))[ch // 2:h - ch // 2 + 1, cw // 2:w - cw // 2 + 1]
+    y, x = np.unravel_index(int(np.argmax(e)), e.shape) if e.size else (0, 0)
+    return crop_zoom(frame, int(x), int(y), cell, zoom)
+
+
 def sheet(src: Path, dst: Path, *, borders: dict | None = None, repeats: dict | None = None,
-          title: str = "") -> Path | None:
+          combing: dict | None = None, title: str = "") -> Path | None:
     """The diagnosis sheet for one video (see the module text). None when no frame could be read."""
     src, dst = Path(src), Path(dst)
     info = media.probe(src)
@@ -104,6 +116,20 @@ def sheet(src: Path, dst: Path, *, borders: dict | None = None, repeats: dict | 
     if not lines:
         return None
     rows.append(_row(lines, width))
+    c = combing or {}
+    if c.get("spans"):
+        spans = sorted(c["spans"], key=lambda s: s[0] - s[1])[:3]          # the longest three
+        cells = []
+        for a, z in sorted(spans):
+            fr = frames_at(src, ((a + z) / 2) / fps)
+            if fr:
+                cells.append(_label(comb_zoom(fr[0]), f"frames {a}-{z} (comb teeth on moving edges?)"))
+        if cells:
+            head = np.full((26, width, 3), 30, np.uint8)
+            cv2.putText(head, f"measured interlaced stretches: {len(c['spans'])} spans, {c.get('span_frames')} frames "
+                              "(interlacing, or thin drawn stripes?)", (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (255, 255, 255), 1, cv2.LINE_AA)
+            rows += [head, _row(cells, width)]
     b = borders or {}
     if b.get("has_borders"):
         fr = frames_at(src, dur * 0.4)

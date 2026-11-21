@@ -65,7 +65,7 @@ def _make(dst: Path, vf: str, rate: str = "25", seconds: int = 4) -> Path:
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
                     f"testsrc2=size=320x240:rate={rate}:duration={seconds}", "-f", "lavfi", "-i",
                     f"sine=frequency=440:duration={seconds}", "-vf", vf, "-c:v", "ffv1", "-pix_fmt", "yuv420p",
-                    "-c:a", "flac", "-shortest", str(dst)], check=True, stdin=subprocess.DEVNULL)
+                    "-c:a", "flac", "-shortest", str(dst)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
     return dst
 
 
@@ -80,18 +80,18 @@ def test_borders_are_measured_and_the_crop_check_tells_bars_from_picture(tmp_pat
     assert crop == (290, 236, 8, 0)
     good = tmp_path / "good.mkv"
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(barred), "-vf",
-                    "crop=290:236:8:0", "-c:v", "ffv1", "-c:a", "copy", str(good)], check=True)
+                    "crop=290:236:8:0", "-c:v", "ffv1", "-c:a", "copy", str(good)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
     rep = verify_crop(barred, good, crop=crop)
     assert rep.passed, rep.failed()
     # cutting into the picture: what was removed is not black
     deep = tmp_path / "deep.mkv"
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(barred), "-vf",
-                    "crop=200:236:60:0", "-c:v", "ffv1", "-c:a", "copy", str(deep)], check=True)
+                    "crop=200:236:60:0", "-c:v", "ffv1", "-c:a", "copy", str(deep)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
     assert "removed" in verify_crop(barred, deep, crop=(200, 236, 60, 0)).failed()
     # a "crop" that also changed the picture it kept
     soft = tmp_path / "soft.mkv"
     subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(barred), "-vf",
-                    "crop=290:236:8:0,gblur=sigma=1", "-c:v", "ffv1", "-c:a", "copy", str(soft)], check=True)
+                    "crop=290:236:8:0,gblur=sigma=1", "-c:v", "ffv1", "-c:a", "copy", str(soft)], check=True, stdin=subprocess.DEVNULL, capture_output=True)
     assert "picture" in verify_crop(barred, soft, crop=crop).failed()
     assert not framing.borders(_make(tmp_path / "full.mkv", "null"), frames=20).any
 
