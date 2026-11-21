@@ -24,8 +24,10 @@ CELL = (160, 120)               # source pixels shown per close-up ...
 ZOOM = 3                        # ... enlarged this much, nearest neighbour (nothing smoothed, nothing invented)
 
 
-def frames_at(src: Path, t: float, count: int = 1) -> list[np.ndarray]:
-    """`count` consecutive frames from time t, as stored (BGR)."""
+def frames_at(src: Path, t: float, count: int = 1, index: int | None = None) -> list[np.ndarray]:
+    """`count` consecutive frames from time t, as stored (BGR). index: the frame with this number instead (decoded
+    from the start, for short clips): two files of the same frames are then compared on the same frame, which a
+    time is not sure to give (a 10 fps source and its result came out one frame apart, across a scene cut)."""
     from .. import texture
     info = media.probe(src)
     w, h = info["width"], info["height"]
@@ -34,9 +36,12 @@ def frames_at(src: Path, t: float, count: int = 1) -> list[np.ndarray]:
     # recipe sheet looked lighter than every recipe (owner sample, 2026-11-21)
     tag = (media.colour_hint(src) or {}).get("color_space") or texture._probe_stream(src).get("color_space")
     matrix = texture._matrix(tag, h)
-    cp = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", f"{max(0.0, t):.3f}",
+    seek = [] if index is not None else ["-ss", f"{max(0.0, t):.3f}"]
+    pick = f"select='gte(n\\,{int(index)})'," if index is not None else ""
+    cp = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", *seek,
                          "-i", str(src), "-map", "0:v:0", "-frames:v", str(count),
-                         "-vf", f"scale=in_color_matrix={matrix},format=bgr24", "-f", "rawvideo",
+                         "-vf", f"{pick}scale=in_color_matrix={matrix},format=bgr24", "-fps_mode", "passthrough",
+                         "-f", "rawvideo",
                          "-"], capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
     size = w * h * 3
     return [np.frombuffer(cp.stdout[i * size:(i + 1) * size], np.uint8).reshape(h, w, 3)

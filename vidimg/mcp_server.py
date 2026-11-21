@@ -139,7 +139,10 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               from the survey's `blocks` list, in the order you want them run, each a name, "name:preset" or
               {"block", "preset", "settings"}. models are tried in your order on the previews, then the usual
               order unless model_strict. scale 1 keeps the size (an anime model then runs at x2 and is scaled
-              back). Start from the item's proposed_recipe and its similar_cases / history, and change what the
+              back). "interpolate": 2 | 3 | 4 ONLY when the person asks for smoother motion or for the frames a
+              low-frame-rate copy is missing: a SECOND file at that many times the frame rate is written beside
+              the faithful one, with frames created between the originals; tell the person how many are created.
+              Start from the item's proposed_recipe and its similar_cases / history, and change what the
               close-ups call for. Refused: a step that needs the source's frame numbers after one that changes
               them, and an anime model with faces "real". Advice about order comes back in the reasons,
       skip true, reason "why you decided this" (shown in the report).

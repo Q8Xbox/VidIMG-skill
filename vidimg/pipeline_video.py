@@ -70,6 +70,7 @@ class VideoRecord:
     sheets: list[str] = field(default_factory=list)
     prepass: dict = field(default_factory=dict)
     recipe: dict = field(default_factory=dict)
+    interpolated: str | None = None          # the frame-rate copy with created frames, when asked for
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -1304,8 +1305,9 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
         rec.attempts = [VideoAttempt(**a) for a in saved.get("attempts", [])]
         rec.notes.append("resumed: model choice and previews reused from the checkpoint")
         log(f"   choice: {rec.chosen} (reused from checkpoint)")
-        return _full_run(src, out_dir, work, base, prof, rec, dict(cands)[rec.chosen], encoder, on_progress, log,
-                         drawn=drawn, shape_ref=shape_ref)
+        return add_interpolation(_full_run(src, out_dir, work, base, prof, rec, dict(cands)[rec.chosen], encoder,
+                                           on_progress, log, drawn=drawn, shape_ref=shape_ref),
+                                 recipe, work, encoder, drawn, log)
     starts = _preview_starts(prof)
     clips = []
     for i, s in enumerate(starts):
@@ -1350,8 +1352,88 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
     if preview_only:
         rec.notes.append("preview only: full run not started")
         return rec
-    return _full_run(src, out_dir, work, base, prof, rec, chosen[1], encoder, on_progress, log, drawn=drawn,
-                     shape_ref=shape_ref)
+    return add_interpolation(_full_run(src, out_dir, work, base, prof, rec, chosen[1], encoder, on_progress, log,
+                                       drawn=drawn, shape_ref=shape_ref), recipe, work, encoder, drawn, log)
+
+
+INTERPOLATE_MAX_FPS = 61.0      # nothing is gained above 60 fps
+RIFE_MODEL = "rife-v4.26"       # the anime model of Video2X 6.4.0 fails to run (error -1, 2026-11-21)
+
+
+def lossless_copy(src: Path, dst: Path) -> str | None:
+    """`src` as FFV1 in Matroska, audio copied, every frame in display order. None when written, else why not."""
+    cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(src), "-map", "0:v:0",
+                         "-map", "0:a?", "-c:v", "ffv1", "-level", "3", "-c:a", "copy", "-fps_mode", "passthrough", str(dst)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    if cp.returncode != 0 or not Path(dst).exists():
+        return cp.stderr.strip()[-200:] or "no lossless copy could be written"
+    return None
+
+
+def add_interpolation(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn: bool, log=print) -> VideoRecord:
+    """When the recipe asks for it (only on the person's request): a second file at a multiple of the frame rate,
+    with frames created between the originals (RIFE). The delivered file is not touched and stays the faithful
+    one. The copy is kept only if the guard finds the original frames unchanged in it; the created frames cannot
+    be vouched for by any check, and the record says how many they are."""
+    m = recipe.get("interpolate")
+    if not m or not rec.delivered:
+        return rec
+    src = Path(rec.delivered)
+    info = media.probe(src, exact=True)
+    fps = info["fps"] or 0
+    if not fps or fps * m > INTERPOLATE_MAX_FPS:
+        rec.notes.append(f"frame-rate copy not made: {fps:g} fps x{m} is above {INTERPOLATE_MAX_FPS - 1:g} fps")
+        return rec
+    dst = src.with_name(f"{src.stem}_{fps * m:.0f}fps{src.suffix}")
+    idir = work / "interpolate"
+    tmp = idir / "out" / dst.name                           # its own folder: an output folder may not hold the input
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    (idir / "in").mkdir(parents=True, exist_ok=True)
+    codec, pix, extra = (video2x.NVENC_CODEC[encoder] if encoder in video2x.NVENC_CODEC and media.nvenc()
+                         else video2x.ENCODER_TO_CODEC.get(encoder, video2x.ENCODER_TO_CODEC["hevc10"]))
+    log(f"   frame-rate copy: {fps:g} -> {fps * m:g} fps with RIFE ({m - 1} of every {m} frames created)")
+    # Video2X is given a lossless copy without reordered frames: reading the delivered HEVC it lost the last two
+    # frames (six of the copy's), which made the copy short and the guard unable to find the originals in it
+    # (owner sample, 2026-11-21); from FFV1 a 120-frame clip came out as the full 358
+    feed = idir / "in" / "feed.mkv"
+    problem = lossless_copy(src, feed)
+    if problem:
+        rec.notes.append(f"frame-rate copy not made: {problem}")
+        shutil.rmtree(idir, ignore_errors=True)
+        return rec
+    r = video2x.run(feed, tmp, "rife", content="anime" if drawn else "real", fps_multiplier=m, model=RIFE_MODEL,
+                    codec=codec, pix_fmt=pix, extra=dict(extra))
+    feed.unlink(missing_ok=True)
+    if not r.ok:
+        rec.notes.append(f"frame-rate copy not made: {r.error}")
+        shutil.rmtree(idir, ignore_errors=True)
+        return rec
+    media.fix_av_offset(src, tmp)
+    media.fix_aspect(src, tmp)
+    side = carry_side_streams(src, tmp)
+    rep_ = verify_video(src, tmp, interpolated=True, drawn_faces=drawn)
+    made = media.probe(tmp, exact=True)["frames"]
+    rec.prepass["interpolate"] = {"multiplier": m, "frames": made, "guard_passed": rep_.passed,
+                                  "guard": {g.name: {"status": g.status, "value": g.value} for g in rep_.gates}}
+    log(f"   frame-rate copy: guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if not rep_.passed:
+        rec.notes.append(f"frame-rate copy not kept: the original frames did not come through unchanged "
+                         f"({', '.join(rep_.failed())})")
+        shutil.rmtree(idir, ignore_errors=True)
+        return rec
+    dst.unlink(missing_ok=True)
+    shutil.move(str(tmp), str(dst))
+    shutil.rmtree(idir, ignore_errors=True)
+    rec.interpolated = str(dst)
+    rec.notes.append(f"a second file at {fps * m:g} fps was written because it was asked for: {made - info['frames']} of its "
+                     f"{made} frames were created between the originals by RIFE and are not original picture (they "
+                     "can morph fast movement and repeat a ghosted frame); the original frames in it are unchanged. "
+                     "The faithful file at the original rate is the delivered one" + (f"; {side}" if side else ""))
+    try:
+        (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
+    except OSError:
+        pass
+    return rec
 
 
 def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.VideoProfile, rec: VideoRecord,

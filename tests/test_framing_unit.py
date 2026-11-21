@@ -262,3 +262,17 @@ def test_closeup_frames_follow_the_tools_colour_rule(tmp_path):
         assert float(np.abs(got - read(clip, size, rule)).mean()) < 0.01       # HD as BT.709, SD as BT.601 ...
         assert float(np.abs(got - read(clip, size, other)).mean()) > 1.0       # ... and the two do differ
     assert len(closeups.frames_at(clip, 0.0, 3)) == 3
+
+
+@needs_ffmpeg
+def test_a_frame_can_be_asked_for_by_its_number(tmp_path):
+    from vidimg.report import closeups
+
+    clip = tmp_path / "count.mkv"
+    subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "lavfi", "-i",
+                    "testsrc2=size=320x240:rate=10:duration=2", "-pix_fmt", "yuv420p", "-c:v", "ffv1", str(clip)],
+                   check=True, stdin=subprocess.DEVNULL, capture_output=True)
+    run = closeups.frames_at(clip, 0.0, 8)
+    for n in (0, 5, 7):
+        assert np.array_equal(closeups.frames_at(clip, 99.0, index=n)[0], run[n])     # the time is ignored
+    assert not np.array_equal(run[5], run[6])

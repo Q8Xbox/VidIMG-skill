@@ -36,6 +36,11 @@ SHIFT_MIN = 1.25            # luma pixels beyond the baseline: below this the co
 SPREAD_MAX = 0.5            # luma pixels: frames must agree this well (median absolute deviation) ...
 SPREAD_REL = 0.15           # ... or within this fraction of the shift (Sample04: 0.55 on a 4 px shift)
 MIN_FRAMES = 4
+KNOWN_MAX = 1.0             # luma pixels (MAD): a component that scatters more than this was not measured at all
+MORE_MAX_HEIGHT = 576       # ... on standard-definition sources (a one-plane shift is a tape-era fault; HD seeks are slow)
+MORE_FRAMES = 4             # a displaced component whose frames nearly agree is measured again on this many times
+                            # the frames before it is given up (owner sample, 2026-11-21: a 2.2 px sideways shift
+                            # of Cr read MAD 0.57 on 12 frames, 0.48 on 48; the limit is 0.5)
 
 
 @dataclass
@@ -61,26 +66,52 @@ class ChromaShift:
         mad = (self.spreads.get(plane) or [self.spread, self.spread])[axis]
         return mad <= max(SPREAD_MAX, SPREAD_REL * abs(self.excess()[plane][axis]))
 
+    def known(self, plane: str, axis: int) -> bool:
+        """Where this plane sits on this axis was measured at all (its frames do not scatter)."""
+        return (self.spreads.get(plane) or [self.spread, self.spread])[axis] <= KNOWN_MAX
+
+    def displaced(self, plane: str, axis: int) -> bool:
+        """This plane sits off the lines on this axis: far enough, its frames agree, and the other plane's
+        position there is known. The planes are judged one by one. They used to be corrected together or not at
+        all (a tape's chroma delay moves both), but a transfer can displace one alone: an owner cartoon has both
+        planes 4 px low and Cr alone 2.2 px to the right; moving Cr back left 0.1 px and made no fringe, while
+        the together-rule left it where it was. Two things still hold a plane back. The other plane must be
+        known: if it scatters widely, the picture is simply hard to measure on that axis. And if the other plane
+        also reads far off but its frames disagree (an owner sample: 1.7 px steady, 1.9 px scattered), the two are
+        probably displaced together and only one could be moved reliably, which would pull them apart: neither
+        is moved."""
+        other = "v" if plane == "u" else "u"
+        ex = self.excess()
+        together_but_unsure = abs(ex[other][axis]) >= SHIFT_MIN and not self.consistent(other, axis)
+        return (abs(ex[plane][axis]) >= SHIFT_MIN and self.consistent(plane, axis)
+                and self.known(other, axis) and not together_but_unsure)
+
     def axis_ok(self, axis: int) -> bool:
-        """Both planes agree frame to frame on this direction. A direction is corrected for both planes or for
-        neither: moving one colour plane alone could make new fringes (a tape's chroma delay moves both)."""
-        return self.consistent("u", axis) and self.consistent("v", axis)
+        """Something on this direction is to be corrected."""
+        return self.displaced("u", axis) or self.displaced("v", axis)
 
     @property
     def is_shifted(self) -> bool:
+        return self.frames >= MIN_FRAMES and any(self.axis_ok(i) for i in (0, 1))
+
+    def nearly(self) -> bool:
+        """A component is far off the lines and its frames almost agree: worth measuring on more frames."""
         ex = self.excess()
-        return self.frames >= MIN_FRAMES and any(
-            self.axis_ok(i) and max(abs(ex["u"][i]), abs(ex["v"][i])) >= SHIFT_MIN for i in (0, 1))
+        return any(abs(ex[k][i]) >= SHIFT_MIN and not self.consistent(k, i) and self.known(k, i)
+                   for k in ("u", "v") for i in (0, 1))
 
     def correction(self, horizontal_only: bool = False) -> dict:
-        """How far to MOVE each colour plane (luma pixels), to a quarter pixel. Only directions both planes agree
-        on (axis_ok); small components stay 0. Interlaced sources: horizontal only (a vertical shift measured on woven frames
-        mixes the fields)."""
+        """How far to MOVE each colour plane (luma pixels), to a quarter pixel. A plane is moved on a direction
+        when it is displaced there, or when the other plane is and this one is off by at least half the limit
+        with agreeing frames (the smaller half of a common shift). Interlaced sources: horizontal only (a
+        vertical shift measured on woven frames mixes the fields)."""
         ex = self.excess()
 
         def q(k: str, i: int) -> float:
             x = ex[k][i]
-            if abs(x) < SHIFT_MIN / 2 or not self.axis_ok(i) or (i == 1 and horizontal_only):
+            if (i == 1 and horizontal_only) or not self.axis_ok(i):
+                return 0.0
+            if not (self.displaced(k, i) or (abs(x) >= SHIFT_MIN / 2 and self.consistent(k, i))):
                 return 0.0
             return round(-x * 4) / 4 + 0.0
         return {k: [q(k, 0), q(k, 1)] for k in ("u", "v")}
@@ -175,5 +206,23 @@ def analyze(src: Path, *, count: int = 12, duration: float | None = None) -> Chr
     deinterlacing (see pipeline)."""
     src = Path(src)
     dur = duration if duration is not None else media.probe(src, exact=True)["duration"]
-    times = [dur * (i + 0.5) / count for i in range(count)]
-    return summarize([measure_frame(*f) for f in read_yuv(src, times)])
+    def measure(n: int) -> ChromaShift:
+        return summarize([measure_frame(*f) for f in read_yuv(src, [dur * (i + 0.5) / n for i in range(n)])])
+
+    st = measure(count)
+    if st.frames >= MIN_FRAMES and st.nearly() and (media.probe(src).get("height") or 0) <= MORE_MAX_HEIGHT:
+        more = measure(count * MORE_FRAMES)                 # a few seconds; only when a decision hangs on it
+        if more.frames > st.frames:
+            # only the components in doubt take the larger measurement: the others were already settled, and
+            # a wider net also catches harder frames (the same sample's steady 4 px vertical shift read MAD
+            # 0.44 on 12 frames and 0.62 on 48, which would have un-settled it)
+            ex = st.excess()
+            vals = {"u": list(st.u), "v": list(st.v)}
+            for k in ("u", "v"):
+                for i in (0, 1):
+                    if abs(ex[k][i]) >= SHIFT_MIN and not st.consistent(k, i) and st.known(k, i):
+                        vals[k][i] = getattr(more, k)[i]
+                        st.spreads[k][i] = more.spreads[k][i]
+            st.u, st.v = tuple(vals["u"]), tuple(vals["v"])
+            st.spread = max(max(m) for m in st.spreads.values())
+    return st

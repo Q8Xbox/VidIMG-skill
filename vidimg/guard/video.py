@@ -278,6 +278,18 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
     starts = [s for s in starts if s + 1 < n]
     ratio = b["frames"] / max(1, src_frames)
     if interpolated:
+        # RIFE at a whole multiplier m writes m*n - (m-1) frames: nothing is created after the last one. The ratio
+        # is then just under m (358 / 120 = 2.983) while source frame s sits at output frame s*m exactly. Read as a
+        # ratio, almost no frame "fell on a whole number" and the one that did was a created frame, compared with
+        # an original as if it were kept (face structure 0.23 on a correct result, 2026-11-21)
+        whole = round(ratio)
+        short = src_frames * whole - b["frames"]
+        if whole >= 2 and 0 <= short <= whole * 3:          # up to two source frames lost at the very end as well
+            ratio = float(whole)
+            gates.append(Gate("frames", "pass" if short <= whole else "fail", b["frames"], src_frames * whole - (whole - 1),
+                              f"x{whole}: {b['frames']} frames for {src_frames} originals"
+                              + ("" if short <= whole else f"; {short - (whole - 1)} missing at the end")))
+    if interpolated:
         # frame interpolation keeps the source's frames and adds new ones between them: source frame s is output
         # frame s x ratio wherever that is a whole number (every frame at 2x, every second one at 24 -> 60).
         # Those are compared like any other result; before, an interpolated file passed with no picture gate

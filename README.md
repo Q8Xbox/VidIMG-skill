@@ -71,6 +71,10 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   which size (any model at any size: an anime model at the source's own size runs at x2 and is scaled back), how
   much texture. Only what cannot work is refused; advice about order comes back as notes. The older settings
   (`content`, `model`, `scale`, `filters`, ...) still work and are read as a recipe.
+  - **Created frames only on request.** A recipe's `interpolate` (2, 3 or 4) writes a second file at that many
+    times the frame rate, with frames created between the originals (RIFE), beside the faithful file, which is
+    still the delivered one. The guard confirms the original frames are unchanged in the copy; nothing can vouch
+    for the created ones, and the record says how many they are.
   - **Blocks are data.** A block is one JSON file (`vidimg/blocks/`, and `<output root>/library/blocks/` for the
     ones added on this machine): what it does, when to use it, its script with settings and presets, what it
     costs. Adding a tool is adding a file (`add_block`); no code changes. A scripted block is bounded: a picture
