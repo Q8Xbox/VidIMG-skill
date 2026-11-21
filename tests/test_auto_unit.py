@@ -99,7 +99,7 @@ def test_run_executes_in_order_resumes_and_survives_a_bad_item(tmp_path, monkeyp
                                                                    it.update(state="delivered", result={"delivered": 2, "total": 2})))
     plan = auto.run(tmp_path, log=lambda m: None)
     assert calls == ["photos", "v1", "photos again"] and all(i["state"] in auto.DONE for i in plan["items"])
-    assert auto.summary(plan)["next"] is None
+    assert "review_results" in auto.summary(plan)["next"]              # delivered: now look at the result
 
 
 def test_jobs_know_the_new_kinds_and_report_the_plan(tmp_path):

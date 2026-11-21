@@ -259,12 +259,30 @@ class SRestore:
         raise NotImplementedError("sRestore runs in the VapourSynth backend only")
 
 
-AvsStage = Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | MaskBottom | SRestore
+@dataclass
+class DropRepeats:
+    """A slower original padded to a higher rate with copied frames (25 -> 29.97: every 6th frame a copy;
+    probe/framing.py) -> the original pictures at the original rate. TDecimate mode 2 removes, in each stretch,
+    the frames most like their predecessor until the target rate is reached: it only chooses frames, nothing is
+    synthesised. Runs as its own pass on progressive input; its guard checks that only copies went."""
+
+    frate: str = "25/1"                    # the original rate (exact fraction), from the measured cycle
+    in_fps: str = "30000/1001"             # rate of the pass's input (set by the pipeline)
+
+    def rate(self) -> Fraction:
+        return Fraction(self.frate) / Fraction(self.in_fps)
+
+    def lines(self) -> list[str]:
+        return [f"TDecimate(mode=2, rate={float(Fraction(self.frate)):.6f})"]
+
+
+AvsStage = (Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | MaskBottom | SRestore
+            | DropRepeats)
 # processing order from the Doom9 consensus (04_doom9_practice.md 1.1). Deblock runs on the original
 # grid; for interlaced input, field handling comes first (Deblock_QED needs progressive frames).
 # Un-blending comes right after field handling: every later stage would smear the ghosts further.
 # Chroma shift is corrected on progressive frames, right after field handling.
-_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, ChromaDenoise: 3,
+_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, DropRepeats: 2.3, ChromaDenoise: 3,
           Degrain: 4,
           Repair: 5}
 

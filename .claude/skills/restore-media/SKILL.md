@@ -22,7 +22,8 @@ After setup the person restarts Claude Code (a cloned project also approves the 
 
 | Step | Tool | Notes |
 |---|---|---|
-| **Automatic flow (default)** | `survey_media(paths)` → `decide_plan(plan, decisions)` → `run_plan(plan)` | For any request: one file, many files, folders, a series, or a mix. See "Automatic flow" below. |
+| **Automatic flow (default)** | `survey_media(paths)` → `decide_plan(plan, decisions)` → `run_plan(plan)` → `review_results(plan, reviews)` | For any request: one file, many files, folders, a series, or a mix. See "Automatic flow" below. |
+| Compare recipes by eye | `try_recipes(plan, item_id, recipes)` | Background job → `job_status`. 2–4 recipes on one video's guarded previews, side by side on one image. Before `decide_plan`, when a look must settle the choice. |
 | Check the setup | `doctor()` | First, if anything fails or on a new machine. |
 | Understand the file | `analyze_media(path)` | Profile + the plan the pipeline will follow. For videos it also returns `frames_sheet`: **look at it** to decide cartoon/anime vs real footage. |
 | Restore photos | `restore_photos(paths, out_dir?, deblur?)` | Background job → `job_status`. `deblur=true` only when the person asks for blur removal. |
@@ -48,7 +49,21 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    (3+ numbered episodes in one folder) under the paths, analyses them, and returns a plan: one item per unit of
    work (`photos`, `v1`, `v2`, …, `s1`, …), each with a decision already filled in (content, model from the model
    guide, scale, texture) and its reasons, plus `contact_sheets`: all videos' frame sheets on a few labelled images.
-2. **Look at every contact sheet**, then send your corrections in ONE `decide_plan(plan, {...})` call. The analysis
+   Each video also has `closeups` (one image: line art enlarged without smoothing, the frame with the measured
+   picture area outlined, a strip of consecutive frames) and `findings` (defects measured but corrected only on
+   your decision).
+2. **Look at every contact sheet and every video's close-ups**, then send your corrections in ONE
+   `decide_plan(plan, {...})` call. You are the supervisor here, not a relay for the numbers: they are wrong often
+   enough that only a look settles it (a halo score read white eyes beside dark pupils as ringing; a black bar and
+   a night scene's edge measure the same). On the close-ups judge, per video:
+   - `black_borders` finding → `crop_borders: true` only when everything outside the red outline is black;
+   - `padded_repeats` finding → `remove_repeats: true` only when the frames marked COPY repeat a drawing in the
+     middle of a movement (padding), not a drawing the animator held;
+   - the line close-ups: halos, block edges, stair-steps or colour off the lines that enlarging will make worse.
+     Say what you see in the `reason`; choose the model and `texture` with it in mind.
+   When two or more recipes are plausible and the choice is about how the result looks (which model keeps the
+   lines and the painted backgrounds, how much texture to return), run `try_recipes` and look at its sheet before
+   deciding; choose only among recipes the guard passed. The analysis
    often reads old cartoons as real footage, so confirm `content` for every video and series item, and change the
    model when what you see calls for it (the item's `guide` gives the pick for either reading; realistic drawn
    faces: `cugan-pro`). Add a short `reason`; it appears in the report. You decide; do not ask the person to choose.
@@ -58,8 +73,13 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    job → `job_status`; the result shows finished items while it runs). It runs the photo batch, every video and
    every series through the guarded pipelines, and writes ONE combined report (`index.html`) linking the detailed
    ones. A stopped run continues with `resume_job` or another `run_plan`: finished items are skipped.
-4. Report per item: delivered or original kept and why, guard warnings, the combined report's path. Ask the person
-   to look at the faces. Their visual verdict outranks the numbers.
+4. **Look at the result.** For every delivered video open its before/after sheets (`result.sheets`) and record
+   what you see with `review_results(plan, {id: {verdict, notes}})`: `good`, `acceptable` (name what is not
+   ideal) or `redo` (the item goes back to pending: change its decision and run the plan again). The guard has
+   already decided the result is faithful; your review is about how it looks (clean lines, backgrounds not turned
+   to smooth blobs, no defect made sharper than in the source). It appears in the report.
+5. Report per item: delivered or original kept and why, guard warnings, your review, the combined report's path.
+   Ask the person to look at the faces. Their visual verdict outranks the numbers and yours.
 
 Shell equivalent: `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" auto <paths> [--out DIR]` (survey; add `--run` to run at
 once with the analysis' own decisions) and `python "${CLAUDE_PLUGIN_ROOT}/vidimg_run.py" run-plan --out DIR`.

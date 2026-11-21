@@ -29,9 +29,11 @@ from .adapters import vapoursynth as vsb
 from . import media
 from .adapters import AdapterResult, mark_output, safe_output_dir
 from . import texture as texture_pass
-from .guard.video import _ffmpeg, _frames_by_index, verify_chroma, verify_deblend, verify_mask, verify_video
+from .guard.video import (_ffmpeg, _frames_by_index, verify_chroma, verify_crop, verify_deblend, verify_derepeat,
+                          verify_mask, verify_video)
 from .probe import blend as blend_probe
 from .probe import chroma as chroma_probe
+from .probe import framing as framing_probe
 from .probe import video as probe
 
 PREVIEW_SECONDS = 4.0
@@ -687,6 +689,104 @@ def run_deblend(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
     return dst, info
 
 
+# ----------------------------------------------------------------------------- padded repeats, black borders
+def run_derepeat(base: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple[Path | None, dict]:
+    """Drop the copied frames of a padded original (probe/framing.py) back to its own rate. None when it was not
+    done or did not pass its guard: the caller keeps the padded input."""
+    ddir = work / "derepeat"                # its own folder: an output folder may not hold the pass's input
+    dst, done = ddir / "derepeat.nut", ddir / "derepeat.done"
+    rate = (p.repeats or {}).get("original_fps")
+    if not rate:
+        return None, {"skipped": "no padding cycle was measured"}
+    made_by = fingerprint(base.name, base.stat().st_size, rate)
+    if dst.exists() and done.exists():
+        info = json.loads(done.read_text(encoding="utf-8"))
+        if info.get("fingerprint") == made_by:
+            log(f"   repeats: reusing the finished pass ({info.get('fps_out')} fps)")
+            return dst, info | {"reused": True}
+        shutil.rmtree(ddir, ignore_errors=True)
+        shutil.rmtree(work / "chunks", ignore_errors=True)
+    ok, why = avs.available()
+    if not ok:
+        return None, {"skipped": f"AviSynth+ not available ({why}); the copied frames stay"}
+    in_fps = avs._rate(base)[0]
+    if not in_fps or Fraction(rate) >= in_fps:
+        return None, {"skipped": f"the input runs at {float(in_fps or 0):.3f} fps: nothing to drop for {rate}"}
+    ddir.mkdir(parents=True, exist_ok=True)
+    r = avs.render(base, dst, [avs.DropRepeats(frate=rate, in_fps=str(in_fps))], work=ddir)
+    info: dict = {"engine": "avisynth", "fps_in": str(in_fps), "fps_out": rate, "ok": r.ok, "error": r.error,
+                  "frames": r.details.get("frames"), "cycle": p.repeats.get("cycle"),
+                  "share_before": p.repeats.get("share")}
+    if not r.ok:
+        info["skipped"] = f"the pass failed: {r.error}"
+        return None, info
+    colour = media.colour_hint(base) or media.colour_hint(dst)
+    info["colour"] = media.write_colour_sidecar(dst, colour) if colour else {}
+    info["av_sync"] = media.fix_av_offset(base, dst)
+    info["aspect"] = media.fix_aspect(base, dst)
+    rep_ = verify_derepeat(base, dst, in_fps=in_fps, out_fps=Fraction(rate))
+    info["guard"] = {g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates}
+    info["guard_passed"] = rep_.passed
+    info["share_after"] = info["guard"].get("repeats", {}).get("value")
+    log(f"   repeats removed {float(in_fps):.3f} -> {float(Fraction(rate)):.3f} fps: guard "
+        f"{'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if not rep_.passed:
+        info["skipped"] = f"the pass failed its guard ({', '.join(rep_.failed())}): the copied frames stay"
+        return None, info
+    info["fingerprint"] = made_by
+    done.write_text(json.dumps(info, default=str), encoding="utf-8")
+    return dst, info
+
+
+def run_crop(base: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple[Path | None, dict]:
+    """Cut the measured black bars away (lossless, even edges, pixel shape kept). None when it was not done or
+    did not pass its guard: the caller keeps the bars."""
+    cdir = work / "crop"
+    dst, done = cdir / "crop.nut", cdir / "crop.done"
+    bi = media.probe(base)
+    crop = framing_probe.even_crop(bi["width"], bi["height"], p.borders or {})
+    if crop is None or (bi["width"], bi["height"]) != (p.width, p.height):
+        return None, {"skipped": "no bar wide enough to cut on even pixels"}
+    made_by = fingerprint(base.name, base.stat().st_size, list(crop))
+    if dst.exists() and done.exists():
+        info = json.loads(done.read_text(encoding="utf-8"))
+        if info.get("fingerprint") == made_by:
+            log("   borders: reusing the finished crop")
+            return dst, info | {"reused": True}
+        shutil.rmtree(cdir, ignore_errors=True)
+        shutil.rmtree(work / "chunks", ignore_errors=True)
+    colour = media.colour_hint(base) or avs._rate(base)[2]
+    if avs.is_full_range(colour):
+        return None, {"skipped": "full-range source: the lossless crop would have to change its levels"}
+    cdir.mkdir(parents=True, exist_ok=True)
+    w, h, x, y = crop
+    sar = (bi.get("sar") or "1:1").replace(":", "/")
+    cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(base),
+                         "-map", "0:v:0", "-map", "0:a?", "-c:a", "copy", "-map_metadata", "0",
+                         "-vf", f"crop={w}:{h}:{x}:{y},setsar={sar if not sar.startswith('0') else '1'}",
+                         "-fps_mode", "passthrough", *avs.INTERMEDIATE, str(dst)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    info: dict = {"crop": {"width": w, "height": h, "x": x, "y": y}, "borders": {k: p.borders.get(k) for k in
+                  ("left", "right", "top", "bottom")}, "ok": cp.returncode == 0 and dst.exists(),
+                  "error": cp.stderr.strip()[-300:] or None}
+    if not info["ok"]:
+        info["skipped"] = f"the crop failed: {info['error']}"
+        return None, info
+    info["colour"] = media.write_colour_sidecar(dst, colour) if colour else {}
+    info["av_sync"] = media.fix_av_offset(base, dst)
+    rep_ = verify_crop(base, dst, crop=crop)
+    info["guard"] = {g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates}
+    info["guard_passed"] = rep_.passed
+    log(f"   borders cropped {bi['width']}x{bi['height']} -> {w}x{h}: guard "
+        f"{'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+    if not rep_.passed:
+        info["skipped"] = f"the crop failed its guard ({', '.join(rep_.failed())}): the bars stay"
+        return None, info
+    info["fingerprint"] = made_by
+    done.write_text(json.dumps(info, default=str), encoding="utf-8")
+    return dst, info
+
+
 def run_prepass(src: Path, work: Path, p: probe.VideoProfile, log=print,
                 mask_tape_noise: bool = False) -> tuple[Path | None, dict]:
     """Classical pre-pass: field handling (when planned), then un-blending (when planned). Returns the new base,
@@ -834,7 +934,8 @@ def _cut(src: Path, start: float, seconds: float, dst: Path) -> None:
 def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encoder: str = "hevc10",
                   on_progress: Callable[[int, int], None] | None = None, log=print,
                   scale: float | None = None, content: str = "auto", model: str | None = None,
-                  mask_tape_noise: bool = False, model_strict: bool = True) -> VideoRecord:
+                  mask_tape_noise: bool = False, model_strict: bool = True, remove_repeats: bool = False,
+                  crop_borders: bool = False) -> VideoRecord:
     src, out_dir = Path(src), Path(out_dir)
     safe_output_dir(out_dir, src)
     mark_output(out_dir)
@@ -864,7 +965,9 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
                | ({"model_first": True} if model and not model_strict else {})
                | ({"engine": config.VIDEO_ENGINE} if config.VIDEO_ENGINE != "auto" else {})
                | ({"texture": config.TEXTURE_STRENGTH} if config.TEXTURE_STRENGTH != 1.0 else {})
-               | ({"mask_tape_noise": True} if mask_tape_noise else {}))
+               | ({"mask_tape_noise": True} if mask_tape_noise else {})
+               | ({"remove_repeats": True} if remove_repeats else {})
+               | ({"crop_borders": True} if crop_borders else {}))
     drawn = is_anime(prof, content)
     log(f"   plan: {rec.plan}")
     for n in tape_notes(prof, masked=mask_tape_noise and "head_switching" in prof.flags):
@@ -895,6 +998,36 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
                              f"{d['blend_share_after']:.0%}); fewer frames, same duration and audio")
         elif d.get("skipped"):
             rec.notes.append(f"blended frames found but not removed: {d['skipped']}")
+    # framing, each its own guarded pass on progressive frames: a pass that fails leaves the video as it was
+    shape_ref = src
+    if remove_repeats:
+        if "padded_repeats" not in prof.flags:
+            rec.notes.append("repeat removal asked for, but no padding cycle was measured: nothing dropped")
+        else:
+            un, rec.prepass["derepeat"] = run_derepeat(base, work, prof, log)
+            d = rec.prepass["derepeat"]
+            if un is not None:
+                base = un
+                rec.notes.append(f"copied frames removed: {float(Fraction(d['fps_in'])):.3f} -> "
+                                 f"{float(Fraction(d['fps_out'])):.3f} fps, the original's rate (every "
+                                 f"{d.get('cycle')}th frame was a copy); fewer frames, same duration and audio")
+            else:
+                rec.notes.append(f"copied frames found but not removed: {d.get('skipped')}")
+    if crop_borders:
+        if "black_borders" not in prof.flags:
+            rec.notes.append("border crop asked for, but no black bar was measured: nothing cut")
+        else:
+            cut, rec.prepass["crop"] = run_crop(base, work, prof, log)
+            d = rec.prepass["crop"]
+            if cut is not None:
+                base = shape_ref = cut
+                b = d["borders"]
+                rec.notes.append(f"black borders cut away (left {b['left']}, right {b['right']}, top {b['top']}, "
+                                 f"bottom {b['bottom']} px): {prof.width}x{prof.height} -> "
+                                 f"{d['crop']['width']}x{d['crop']['height']} before enlarging; the picture itself "
+                                 "is untouched")
+            else:
+                rec.notes.append(f"black borders found but not cut: {d.get('skipped')}")
     saved = json.loads(choice_file.read_text(encoding="utf-8")) if choice_file.exists() else {}
     labels = [label for label, _ in cands]
     if saved.get("chosen") in labels and saved.get("options", options) == options and not preview_only:
@@ -903,7 +1036,7 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
         rec.notes.append("resumed: model choice and previews reused from the checkpoint")
         log(f"   choice: {rec.chosen} (reused from checkpoint)")
         return _full_run(src, out_dir, work, base, prof, rec, dict(cands)[rec.chosen], encoder, on_progress, log,
-                         drawn=drawn)
+                         drawn=drawn, shape_ref=shape_ref)
     starts = _preview_starts(prof)
     clips = []
     for i, s in enumerate(starts):
@@ -948,11 +1081,13 @@ def restore_video(src: Path, out_dir: Path, *, preview_only: bool = False, encod
     if preview_only:
         rec.notes.append("preview only: full run not started")
         return rec
-    return _full_run(src, out_dir, work, base, prof, rec, chosen[1], encoder, on_progress, log, drawn=drawn)
+    return _full_run(src, out_dir, work, base, prof, rec, chosen[1], encoder, on_progress, log, drawn=drawn,
+                     shape_ref=shape_ref)
 
 
 def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.VideoProfile, rec: VideoRecord,
-              make: Callable[[], list], encoder: str, on_progress, log, drawn: bool = False) -> VideoRecord:
+              make: Callable[[], list], encoder: str, on_progress, log, drawn: bool = False,
+              shape_ref: Path | None = None) -> VideoRecord:
     chosen = (rec.chosen, make)
     ref_vf = None
     dst = out_dir / f"{work.name}_restored{output_suffix(src, encoder)}"   # work.name: the stem (see work_key)
@@ -1003,7 +1138,9 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     side = carry_side_streams(src, dst)
     if side:
         rec.notes.append(side)
-    aspect = media.fix_aspect(src, dst)        # against the original: a pre-pass intermediate may have lost it
+    # against the original: a pre-pass intermediate may have lost it. After a border crop the cropped pass is
+    # the reference (same pixel shape as the original, checked by its guard; the frame itself is narrower)
+    aspect = media.fix_aspect(shape_ref or src, dst)
     if aspect:
         rec.notes.append(aspect)
     final = verify_video(base, dst, reference_vmaf=None, src_vf=ref_vf, drawn_faces=drawn)
@@ -1034,7 +1171,7 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     return rec
 
 
-BULKY = ("chunks", "model", "previews", "deblend", "deblend_trials", "rejected", "prepass.nut", "prepass.nut.colour.json", "prepass.lwi",
+BULKY = ("chunks", "model", "previews", "deblend", "deblend_trials", "derepeat", "crop", "rejected", "prepass.nut", "prepass.nut.colour.json", "prepass.lwi",
          "cuts.json")
 
 

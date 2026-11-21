@@ -3,6 +3,7 @@
 doctor [--json]                    environment report (open-model runtime, ffmpeg, classical engines, GPU)
 auto PATHS... [--out] [--run]      survey any mix of photos, videos and series folders into one plan (and run it)
 run-plan --out FOLDER              run (or continue) the plan in FOLDER: everything, one combined report
+try-recipes ITEM FILE --out FOLDER compare 2-4 recipes (a JSON list) on one video's guarded previews, side by side
 restore PHOTOS_OR_FOLDERS [--out]  photo pipeline: analyse, restore, guard, review page
 restore-video VIDEO [--out]        video pipeline: field handling, guarded previews, full run, report
 restore-series FOLDER [--episodes] numbered episodes into ONE folder, resumable, + one series report
@@ -64,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
     au.add_argument("--run", action="store_true", help="run the plan at once with the analysis' own decisions")
     rp = sub.add_parser("run-plan", help="run or continue a surveyed plan; writes one combined report")
     rp.add_argument("--out", type=Path, required=True, help="the plan's folder (holds plan.json)")
+    tr = sub.add_parser("try-recipes", help="compare recipes for one video of a plan on its guarded previews")
+    tr.add_argument("item", help="the item id in the plan (v1, s1, ...)")
+    tr.add_argument("recipes", type=Path, help="JSON file: a list of 2-4 recipes (content, model, scale, texture, "
+                                                "remove_repeats, crop_borders, name)")
+    tr.add_argument("--out", type=Path, required=True, help="the plan's folder (holds plan.json)")
 
     rv = sub.add_parser("restore", help="restore photos (analyse, restore, guard, retry) + review page")
     rv.add_argument("inputs", nargs="+", type=Path, help="image files or folders")
@@ -88,6 +94,10 @@ def main(argv: list[str] | None = None) -> int:
                           "torch, or mlrt (ONNX Runtime DirectML, any DirectX 12 GPU)")
     rvv.add_argument("--mask-tape-noise", action="store_true",
                      help="opt-in: black out VHS head-switching noise found in the bottom lines")
+    rvv.add_argument("--remove-repeats", action="store_true",
+                     help="drop the copied frames of a padded original (analyze shows the cycle), back to its own rate")
+    rvv.add_argument("--crop-borders", action="store_true",
+                     help="cut the measured black bars away before enlarging (the frame gets narrower, never stretched)")
     rvv.add_argument("--texture", type=float, default=None,
                      help="source texture put back after the model, 0..1 (default 1; 0 = off, the model's clean look)")
 
@@ -157,6 +167,19 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("--texture must be between 0 and 1")
         config.TEXTURE_STRENGTH = a.texture
 
+    if a.cmd == "try-recipes":
+        import time
+        from . import auto
+        try:
+            plan = auto.trial(a.out, a.item, json.loads(a.recipes.read_text(encoding="utf-8")),
+                              log=lambda m: print(time.strftime("%H:%M:%S"), m, flush=True))
+        except (ValueError, FileNotFoundError) as e:
+            print(f"error: {e}")
+            return 2
+        got = next(it for it in plan["items"] if it["id"] == a.item)["trials"]
+        print(json.dumps(got, indent=1, ensure_ascii=False, default=str))
+        return 0 if any(r["guard_passed"] for r in got["recipes"]) else 1
+
     if a.cmd in ("auto", "run-plan"):
         import time
         from datetime import datetime
@@ -192,7 +215,8 @@ def main(argv: list[str] | None = None) -> int:
         rec = pipeline_video.restore_video(a.video, out, preview_only=a.preview_only, encoder=a.encoder,
                                            on_progress=progress, scale=a.scale, content=a.content,
                                            model=a.model or a.prefer, model_strict=a.prefer is None,
-                                           mask_tape_noise=a.mask_tape_noise)
+                                           mask_tape_noise=a.mask_tape_noise, remove_repeats=a.remove_repeats,
+                                           crop_borders=a.crop_borders)
         print()
         out.mkdir(parents=True, exist_ok=True)
         (out / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, ensure_ascii=False, default=str),

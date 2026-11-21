@@ -507,6 +507,170 @@ def verify_deblend(src: Path, dst: Path, *, in_fps, out_fps, in_share: float, wi
     return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
 
 
+# ----------------------------------------------------------------------------- padded repeats removed
+DEREPEAT_KEPT_SHARE = 0.97      # share of sampled input frames whose picture is still in the output
+DEREPEAT_LEFT = 0.03            # copies left among moving frames after the pass
+
+
+def _rate_gates(a: dict, b: dict, fi, fo) -> list[Gate]:
+    """Structure of a pass that changes the frame rate by choosing frames: count at the new rate, duration,
+    audio, lip sync, shape."""
+    gates: list[Gate] = []
+    want = int(a["frames"] * fo / fi)
+    diff = abs(b["frames"] - want)
+    gates.append(Gate("frames", "pass" if diff <= max(2, want * 0.002) else "fail", b["frames"], want,
+                      f"output {b['frames']} vs {want} expected at {float(fo):.3f} fps"))
+    dd = abs(b["duration"] - a["duration"])
+    gates.append(Gate("duration", "pass" if dd <= max(VIDEO_THRESHOLDS["duration_tolerance_s"], 2 / float(fo)) else "fail",
+                      round(b["duration"], 3), round(a["duration"], 3), f"difference {dd:.3f}s"))
+    gates.append(Gate("audio", "pass" if b["audio_streams"] >= a["audio_streams"] else "fail", b["audio_streams"],
+                      a["audio_streams"], "audio streams kept"))
+    oa, ob = media.av_offset(a), media.av_offset(b)
+    if oa is not None and ob is not None:
+        tol = max(0.02, 0.5 / float(fo))
+        gates.append(Gate("av_sync", "pass" if abs(oa - ob) <= tol else "fail", round(ob - oa, 3), round(tol, 3),
+                          f"video-audio start offset {ob:+.3f} s vs source {oa:+.3f} s"))
+    da, db = media.display_aspect(a), media.display_aspect(b)
+    if da and db:
+        rel = db / da - 1
+        gates.append(Gate("aspect", "pass" if abs(rel) <= ASPECT_TOL else "fail", round(rel, 4), ASPECT_TOL,
+                          f"display aspect {db:.4f} vs source {da:.4f}"))
+    return gates
+
+
+def _best_psnr(frame: np.ndarray, pool: list[np.ndarray], centre: int, search: int) -> float | None:
+    lo, hi = max(0, centre - search), min(len(pool), centre + search + 1)
+    if lo >= hi:
+        return None
+    f32 = frame.astype(np.float32)
+    mse = min(float(np.mean((f32 - pool[m]) ** 2)) for m in range(lo, hi))
+    return float(10 * np.log10(255 ** 2 / max(mse, 1e-6)))
+
+
+def verify_derepeat(src: Path, dst: Path, *, in_fps, out_fps, windows: int = 4, seconds: float = 6.0) -> GuardReport:
+    """Repeat removal against its input. Structure as for un-blending, then what makes dropping frames safe:
+    * selection: every sampled output frame is an exact copy of an input frame near the same time;
+    * pictures: every sampled input frame still has its picture in the output (only copies were dropped: a
+      dropped drawing would be a picture the person never sees again);
+    * repeats: the padding cycle is gone from the output."""
+    from fractions import Fraction
+
+    from ..probe import blend, framing
+
+    src, dst = Path(src), Path(dst)
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    fi, fo = Fraction(in_fps), Fraction(out_fps)
+    gates = _rate_gates(a, b, fi, fo)
+    copies = judged = kept = seen = 0
+    worst = worst_in = None
+    span = max(1.0, min(seconds, a["duration"] / max(1, windows) - 1))
+    for k in range(windows):
+        t = max(0.0, a["duration"] * (k + 0.5) / windows - span / 2)
+        pre = min(1.0, t)
+        outs = list(blend.read_gray(dst, t - pre, span + 2.0, width=180))
+        ins = list(blend.read_gray(src, t - pre, span + 2.0, width=180))
+        if not outs or not ins:
+            continue
+        first, last = round(pre * fo), round((pre + span) * fo)
+        for i in range(first, min(last, len(outs))):                       # output frames of the inner span
+            p = _best_psnr(outs[i], ins, round(i / fo * fi), DEBLEND_SEARCH)
+            if p is None:
+                continue
+            judged += 1
+            copies += p >= DEBLEND_COPY_PSNR
+            worst = p if worst is None else min(worst, p)
+        first, last = round(pre * fi), round((pre + span) * fi)
+        for j in range(first, min(last, len(ins))):                        # input frames of the inner span
+            p = _best_psnr(ins[j], outs, round(j / fi * fo), DEBLEND_SEARCH)
+            if p is None:
+                continue
+            seen += 1
+            kept += p >= DEBLEND_COPY_PSNR
+            worst_in = p if worst_in is None else min(worst_in, p)
+    share = copies / judged if judged else 0.0
+    gates.append(Gate("selection", "pass" if judged and share >= DEBLEND_COPY_SHARE else "fail", round(share, 4),
+                      DEBLEND_COPY_SHARE, f"{copies}/{judged} sampled output frames are copies of input frames "
+                      f"(worst {worst if worst is None else round(worst, 1)} dB)"))
+    held = kept / seen if seen else 0.0
+    gates.append(Gate("pictures", "pass" if seen and held >= DEREPEAT_KEPT_SHARE else "fail", round(held, 4),
+                      DEREPEAT_KEPT_SHARE, f"{kept}/{seen} sampled input pictures are still in the output "
+                      f"(worst {worst_in if worst_in is None else round(worst_in, 1)} dB)"))
+    left = framing.repeats(dst)
+    gates.append(Gate("repeats", "pass" if left.share <= DEREPEAT_LEFT and not left.is_padded else "fail", left.share,
+                      DEREPEAT_LEFT, f"copied frames {left.share:.1%} of moving frames after the pass"
+                      + (f"; still a cycle of {left.cycle}" if left.is_padded else "")))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"selection": "the output is not made of input frames: keep the padded input",
+            "pictures": "real pictures were dropped, not only copies: keep the padded input",
+            "repeats": "the copies are still there at this rate: keep the padded input"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
+# ----------------------------------------------------------------------------- black borders cropped
+CROP_SAME_PSNR = 60.0           # dB: the picture inside the crop must be untouched
+CROP_BLACK_LEVEL = 40           # 8-bit luma: 95 % of what was cut away lies below this ...
+CROP_BLACK_SHARE = 0.9          # ... in at least this share of the sampled frames
+
+
+def _luma8(png: Path) -> np.ndarray | None:
+    """A stored luma plane (8- or 16-bit PNG) on the 8-bit scale, as float."""
+    img = imgfile.imread(str(png), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if img.ndim == 3:
+        img = img[..., 0]
+    return img.astype(np.float32) / (257.0 if img.dtype == np.uint16 else 1.0)
+
+
+def verify_crop(src: Path, dst: Path, *, crop: tuple[int, int, int, int], frames: int = 16) -> GuardReport:
+    """A border crop against its input: same frames, duration, audio and pixel shape; the kept picture is
+    the input's, untouched; and what was cut away really was black, on frames spread over the video."""
+    from fractions import Fraction
+
+    src, dst = Path(src), Path(dst)
+    w, h, x, y = crop
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    gates = [g for g in _rate_gates(a, b, Fraction(1), Fraction(1)) if g.name != "aspect"]
+    gates.append(Gate("size", "pass" if (b["width"], b["height"]) == (w, h) else "fail", f"{b['width']}x{b['height']}",
+                      f"{w}x{h}", "the cropped size"))
+    sa, sb = a.get("sar") or "1:1", b.get("sar") or "1:1"
+    same = Fraction(*map(int, sa.split(":"))) == Fraction(*map(int, sb.split(":")))
+    gates.append(Gate("pixel_aspect", "pass" if same else "fail", sb, sa,
+                      "pixel shape unchanged (the picture is cut, never stretched)"))
+    total = min(a["frames"], b["frames"])
+    idx = sorted({int(total * (i + 0.5) / frames) for i in range(frames)})
+    worst, black, judged = None, 0, 0
+    with tempfile.TemporaryDirectory(prefix="vidimg_crop_") as tmp:
+        # the luma plane as stored: through RGB, an 8-bit input and its 10-bit lossless copy round differently
+        # (48 dB on identical pictures, measured)
+        full = _frames_by_index(src, idx, Path(tmp), "s", pre_vf="extractplanes=y")
+        cut = _frames_by_index(dst, idx, Path(tmp), "d", pre_vf="extractplanes=y")
+        for i in idx:
+            if i not in full or i not in cut:
+                continue
+            g, c = _luma8(full[i]), _luma8(cut[i])
+            if g is None or c is None or c.shape[:2] != (h, w):
+                continue
+            inner = g[y:y + h, x:x + w]
+            mse = float(np.mean((inner - c) ** 2))
+            p = float(10 * np.log10(255 ** 2 / max(mse, 1e-6)))
+            worst = p if worst is None else min(worst, p)
+            mask = np.ones(g.shape, bool)
+            mask[y:y + h, x:x + w] = False
+            judged += 1
+            black += bool(mask.any()) and float(np.percentile(g[mask], 95)) <= CROP_BLACK_LEVEL
+    gates.append(Gate("picture", "pass" if worst is not None and worst >= CROP_SAME_PSNR else "fail",
+                      None if worst is None else round(worst, 1), CROP_SAME_PSNR,
+                      "the kept picture against the same area of the input (lowest of the sampled frames)"))
+    share = black / judged if judged else 0.0
+    gates.append(Gate("removed", "pass" if judged and share >= CROP_BLACK_SHARE else "fail", round(share, 3),
+                      CROP_BLACK_SHARE, f"what was cut away is black in {black}/{judged} sampled frames"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"picture": "the crop changed the picture it kept: keep the input",
+            "removed": "the cut-away edges hold picture, not black: keep the input"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
 # ----------------------------------------------------------------------------- chroma shift correction
 CHROMA_RESIDUAL_MAX = 0.6       # luma px left beyond the clean baseline after the correction (measured 0.0-0.33)
 LUMA_UNCHANGED_PSNR = 60.0      # dB: a chroma-only pass must leave the luma bit-identical (measured 138 dB)
