@@ -124,9 +124,10 @@ def compose(feed: Path, mids: Path, dst: Path, ghosts: list[int]) -> tuple[int, 
 
 
 def rebuild(feed: Path, dst: Path, ghosts: list[int], work: Path, *, drawn: bool = True,
-            log: Callable[[str], None] = print) -> dict:
+            log: Callable[[str], None] = print, what: str = "ghost frames in movement") -> dict:
     """Write `dst`: `feed` (lossless) with the listed frames made again from their neighbours.
-    work: a folder of its own (each stage writes into a sub-folder that does not hold its input)."""
+    work: a folder of its own (each stage writes into a sub-folder that does not hold its input).
+    what: how the log names the frames (ghosts, or damaged frames: the same is done to both)."""
     feed, dst, work = Path(feed), Path(dst), Path(work)
     ghosts = sorted({int(g) for g in ghosts})
     info: dict = {"asked": len(ghosts)}
@@ -146,7 +147,12 @@ def rebuild(feed: Path, dst: Path, ghosts: list[int], work: Path, *, drawn: bool
     if got < 4 * len(ghosts) - 2:                       # 2 frames per pair, doubled: 4k - 1 (one fewer is tolerated)
         return info | {"ok": False, "error": f"RIFE returned {got} frames for {len(ghosts)} pairs"}
     frames, replaced = compose(feed, mids, dst, ghosts)
-    log(f"   ghost frames in movement: {replaced} of {frames} frames made again from their neighbours")
+    if frames:
+        # the frames were written anew from a pipe, which starts the video at zero: a feed whose sound starts
+        # later or earlier than its picture lost that offset here, and the copy's check refused it (a test cut
+        # with a 2.6 s offset, 2026-11-22)
+        media.fix_av_offset(feed, dst)
+    log(f"   {what}: {replaced} of {frames} frames made again from their neighbours")
     for f in (pairs, mids):
         f.unlink(missing_ok=True)
     return info | {"ok": bool(frames) and replaced == len(ghosts), "frames": frames, "replaced": replaced,

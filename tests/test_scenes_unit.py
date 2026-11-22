@@ -143,19 +143,19 @@ def test_the_sheet_shows_every_kind_with_a_frame_and_its_lines(monkeypatch, tmp_
 
 def test_the_survey_keeps_the_map_in_its_own_file_and_goes_on_without_one(monkeypatch, tmp_path):
     found = scenes.find(iter(_clip()))
-    monkeypatch.setattr(scenes, "scan", lambda src: found)
+    monkeypatch.setattr(scenes, "scan", lambda src, watch=None: found)
     monkeypatch.setattr(closeups, "kinds_sheet", lambda src, dst, kinds, title="": Path(dst))
     said = []
-    got = auto._scene_map("v1", Path("C:/in/clip.mkv"), tmp_path, said.append)
-    assert got["count"] == 4 and got["kinds"] == found.kinds and got["sheet"].endswith("v1_scene_kinds.jpg")
+    got, damaged = auto._scene_map("v1", Path("C:/in/clip.mkv"), tmp_path, said.append)
+    assert damaged is None and got["count"] == 4 and got["kinds"] == found.kinds and got["sheet"].endswith("v1_scene_kinds.jpg")
     stored = json.loads(Path(got["map"]).read_text(encoding="utf-8"))
     assert stored["scenes"] == found.scenes and stored["frames"] == 142
     assert "4 scenes of" in said[-1]
-    monkeypatch.setattr(scenes, "scan", lambda src: scenes.Scenes(frames=3, error="read 3 frames of 9"))
-    assert auto._scene_map("v2", Path("C:/in/clip.mkv"), tmp_path, said.append) is None and "no scene map" in said[-1]
+    monkeypatch.setattr(scenes, "scan", lambda src, watch=None: scenes.Scenes(frames=3, error="read 3 frames of 9"))
+    assert auto._scene_map("v2", Path("C:/in/clip.mkv"), tmp_path, said.append) == (None, None) and "no scene map" in said[-1]
 
-    def broken(src):
+    def broken(src, watch=None):
         raise OSError("gone")
 
     monkeypatch.setattr(scenes, "scan", broken)
-    assert auto._scene_map("v3", Path("C:/in/clip.mkv"), tmp_path, said.append) is None and "failed" in said[-1]
+    assert auto._scene_map("v3", Path("C:/in/clip.mkv"), tmp_path, said.append) == (None, None) and "failed" in said[-1]

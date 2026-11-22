@@ -145,7 +145,16 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
     except Exception as e:  # noqa: BLE001  (an aid for the decision; the survey goes on without it)
         close = None
         log(f"   {item_id}: close-ups failed ({e})")
-    scene_map = _scene_map(item_id, src, out, log)
+    scene_map, damaged = _scene_map(item_id, src, out, log)
+    if damaged and damaged.get("frames"):
+        findings.append({"finding": "damaged_frames",
+                         "what": f"{damaged['count']} single frames show something neither neighbour shows "
+                                 f"(candidates: {', '.join(map(str, damaged['frames'][:12]))}"
+                                 + (", ..." if damaged["count"] > 12 else "") + "); a model sharpens real damage",
+                         "decision": "recipe: rebuild_damaged: [frame numbers] (created frames, in a second file; only "
+                                     "the frames you judged to be damage, and only when the person wants them made again)",
+                         "look": "damaged.sheet: tape tearing, dropouts or broken blocks, or a frame drawn that way "
+                                 "(a flash, lightning, an impact frame, a blink)?"})
     start = {"content": "anime" if anime else "auto", "model": guide["suggested"]}
     try:
         proposed = recipe_mod.validate(recipe_mod.from_decision(start, prof.flags))[0]
@@ -153,7 +162,7 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
         proposed = None
     it = {"id": item_id, "source": str(src), "profile_flags": prof.flags,
           "findings": findings or None, "closeups": str(close) if close else None,
-          "proposed_recipe": proposed, "scenes": scene_map,
+          "proposed_recipe": proposed, "scenes": scene_map, "damaged": damaged,
           "work": {"width": prof.width, "height": prof.height, "frames": prof.frames, "fps": prof.fps},
           "gaps": library.gaps(prof.flags) or None,
           "similar_cases": cases.similar(prof.to_dict(), 3, exclude_source=str(src)) or None,
@@ -177,25 +186,54 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
     return it
 
 
-def _scene_map(item_id: str, src: Path, out: Path, log) -> dict | None:
+def _scene_map(item_id: str, src: Path, out: Path, log) -> tuple[dict | None, dict | None]:
     """Where the video cuts and what kinds of scene it holds (probe.scenes): the whole map in a file of its own,
-    the kinds and a sheet showing each in the plan. An aid for the decision: the survey goes on without it."""
+    the kinds and a sheet showing each in the plan. The same pass over the frames looks for damaged ones
+    (probe.damage). Aids for the decision: the survey goes on without them."""
     try:
-        from .probe import scenes
+        from .probe import damage, scenes
         from .report import closeups
         t0 = time.time()
-        found = scenes.scan(src)
+        finder = damage.Finder()
+        found = scenes.scan(src, watch=finder.add)
         if found.error:
             log(f"   {item_id}: no scene map ({found.error})")
-            return None
+            return None, None
+        damaged = _damaged(item_id, src, out, finder.result(), log)
         where = out / "survey" / f"{item_id}_scenes.json"
         statefile.write_json(where, found.to_dict())
         sheet = closeups.kinds_sheet(src, out / "survey" / f"{item_id}_scene_kinds.jpg", found.kinds,
                                      title=f"{item_id}  {src.name}: {len(found.scenes)} scenes of {len(found.kinds)} kinds")
         log(f"   {item_id}: {len(found.scenes)} scenes of {len(found.kinds)} kinds ({time.time() - t0:.0f} s)")
-        return {"count": len(found.scenes), "kinds": found.kinds, "map": str(where), "sheet": str(sheet) if sheet else None}
+        return ({"count": len(found.scenes), "kinds": found.kinds, "map": str(where), "sheet": str(sheet) if sheet else None},
+                damaged)
     except Exception as e:  # noqa: BLE001
         log(f"   {item_id}: scene map failed ({e})")
+        return None, None
+
+
+DAMAGED_LISTED = 60             # candidate frame numbers carried in the plan (all of them are in the list file)
+
+
+def _damaged(item_id: str, src: Path, out: Path, got, log) -> dict | None:
+    """Candidate damaged frames for the plan: the lone ones that are not flashes, largest first, and a sheet."""
+    try:
+        from .report import closeups
+        lone = [d for d in got.found if d["lone"]]
+        flashes = [d for d in lone if d["looks"] == "flash"]
+        cands = sorted((d for d in lone if d["looks"] != "flash"), key=lambda d: -d["share"])
+        if not lone:
+            return None
+        where = out / "survey" / f"{item_id}_damaged.json"
+        statefile.write_json(where, got.to_dict())
+        sheet = closeups.damage_sheet(src, out / "survey" / f"{item_id}_damaged.jpg", got.found,
+                                      title=f"{item_id}  {src.name}: {len(cands)} candidate damaged frames")
+        log(f"   {item_id}: {len(cands)} candidate damaged frames, {len(flashes)} one-tone flashes, "
+            f"{got.total - len(lone)} in runs")
+        return {"count": len(cands), "frames": [d["frame"] for d in cands[:DAMAGED_LISTED]], "flashes": len(flashes),
+                "in_runs": got.total - len(lone), "list": str(where), "sheet": str(sheet) if sheet else None}
+    except Exception as e:  # noqa: BLE001
+        log(f"   {item_id}: damaged-frame candidates failed ({e})")
         return None
 
 
@@ -391,7 +429,8 @@ def summary(plan: dict) -> dict:
                        est_hours=it.get("est_hours"), needs_look=it.get("needs_look"),
                        findings=it.get("findings"), closeups=it.get("closeups"),
                        proposed_recipe=it.get("proposed_recipe"), similar_cases=it.get("similar_cases"),
-                       history=it.get("history"), gaps=it.get("gaps"), scenes=it.get("scenes"))
+                       history=it.get("history"), gaps=it.get("gaps"), scenes=it.get("scenes"),
+                       damaged=it.get("damaged"))
             if it.get("state") == "pending" and it.get("work"):
                 # for the recipe as it stands now (the decided one, else the proposal); for a series, per episode
                 from . import estimate as estimate_mod
@@ -431,7 +470,14 @@ def _next_step(plan: dict, states: list) -> str | None:
                 "steps: {block: preset | {preset, settings} | false}}}, or limit a step to some kinds with "
                 "its `kinds`. One model serves the whole video; only script filters and the texture strength "
                 "can differ by kind, and only for a single video (not a series). Leave per_kind out when the "
-                "kinds look alike: every difference is something more to check. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
+                "kinds look alike: every difference is something more to check. An item's `damaged` "
+                "lists single frames that show something neither neighbour shows, and damaged.sheet shows the "
+                "largest between their neighbours: tape tearing and dropouts look like that, and so do frames "
+                "drawn on purpose (a flash, lightning, an impact frame, a blink). No model can restore a torn "
+                "frame; it can only be made again from its neighbours, which is a created frame. Tell the "
+                "person what you found, and ONLY if they want such frames made again name the ones you judged "
+                "to be damage in the recipe's `rebuild_damaged`: [frame numbers]; they are then made again in "
+                "a second file and the faithful file keeps them as they are. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
                 "each; an item's `gaps` are defects it was measured to have that no block addresses. When the "
                 "close-ups show a defect with no block (measured or not), write the block from what you know "
                 "about restoring it (add_block), compare the recipe with and without it (try_recipes), and "

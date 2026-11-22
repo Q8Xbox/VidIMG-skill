@@ -57,6 +57,10 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    with frames of each kind. Compose the recipe for the kinds that hold most of the video; where another kind
    wants something else, say so in the recipe's `per_kind` (its own texture strength, another preset of a step,
    or a step left out) or limit a step with `kinds`. One model serves the whole video; single videos only.
+   `damaged` lists single frames that show something neither neighbour shows, with `damaged.sheet`: decide by
+   looking which are damage (tearing, dropouts) and which are drawn that way (a flash, lightning, a blink). Tell
+   the person; only if they want them made again, name the damaged ones in the recipe's `rebuild_damaged`
+   (created frames, in a second file; the faithful file keeps them).
    There are no fixed paths. Each video also comes with `proposed_recipe` (the analysis' starting point),
    `similar_cases` (earlier videos like it: the recipe they got, what the guard said, how the result was
    judged) and `history` (this file's own earlier runs); the survey result lists the `blocks` you compose from.

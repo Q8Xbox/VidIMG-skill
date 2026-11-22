@@ -197,6 +197,62 @@ def sheet(src: Path, dst: Path, *, borders: dict | None = None, repeats: dict | 
     return dst
 
 
+def frames_numbered(src: Path, numbers: list[int]) -> dict[int, np.ndarray]:
+    """The frames with these numbers (counted from the start, as stored), in one pass over the file. A seek by
+    time landed one frame off on some files, and here the frame beside the wanted one is the wrong picture."""
+    from .. import texture
+    want = sorted({int(n) for n in numbers if n >= 0})
+    if not want:
+        return {}
+    info = media.probe(src)
+    w, h = info["width"], info["height"]
+    tag = (media.colour_hint(src) or {}).get("color_space") or texture._probe_stream(src).get("color_space")
+    pick = "+".join(f"eq(n\\,{n})" for n in want)
+    cp = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(src), "-map", "0:v:0",
+                         "-vf", f"select='{pick}',scale=in_color_matrix={texture._matrix(tag, h)},format=bgr24",
+                         "-fps_mode", "passthrough", "-f", "rawvideo", "-"],
+                        capture_output=True, stdin=subprocess.DEVNULL, timeout=3600)
+    size = w * h * 3
+    got = [np.frombuffer(cp.stdout[i * size:(i + 1) * size], np.uint8).reshape(h, w, 3)
+           for i in range(len(cp.stdout) // size)] if size else []
+    return dict(zip(want, got))
+
+
+DAMAGE_SHOWN = 12               # candidates on the sheet (the largest first)
+
+
+def damage_sheet(src: Path, dst: Path, found: list[dict], *, title: str = "") -> Path | None:
+    """Candidate damaged frames (probe.damage), each between its two neighbours. Damage, or a frame drawn that
+    way (a flash, lightning, an impact frame)? Only a look can say; the measurement cannot."""
+    src, dst = Path(src), Path(dst)
+    shown = sorted((d for d in found if d.get("lone")), key=lambda d: (d.get("looks") == "flash", -d["share"]))[:DAMAGE_SHOWN]
+    frames = frames_numbered(src, [d["frame"] + k for d in shown for k in (-1, 0, 1)])
+    width = CELL[0] * ZOOM * 3
+    cw = width // 3
+    rows: list[np.ndarray] = []
+    for d in sorted(shown, key=lambda d: d["frame"]):
+        i = d["frame"]
+        if not all(i + k in frames for k in (-1, 0, 1)):
+            continue
+        cells = []
+        for k in (-1, 0, 1):
+            f = frames[i + k]
+            small = cv2.resize(f, (cw, round(f.shape[0] * cw / f.shape[1])), interpolation=cv2.INTER_AREA)
+            label = (f"frame {i}: {d['share']:.0%} of it stands out" + (" (one flat tone: a flash?)" if d.get("looks") == "flash" else "")
+                     if k == 0 else f"frame {i + k}")
+            cells.append(_label(small, label, (0, 255, 255) if k == 0 else (255, 255, 255)))
+        rows.append(_row(cells, width))
+    if not rows:
+        return None
+    head = np.full((30, width, 3), 60, np.uint8)
+    text = title or "candidate damaged frames"
+    cv2.putText(head, (text + ": damage, or drawn that way?").encode("ascii", "replace").decode()[:150], (6, 21),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    imgfile.imwrite(str(dst), np.vstack([head, *rows]), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return dst
+
+
 def kinds_sheet(src: Path, dst: Path, kinds: list[dict], *, title: str = "") -> Path | None:
     """The kinds of scene a video is made of (probe.scenes), one band per kind: for each example scene the whole
     frame and its busiest line art enlarged. What a kind IS (a night scene, the credits, an action scene) and what

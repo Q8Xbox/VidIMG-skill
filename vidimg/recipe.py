@@ -14,6 +14,10 @@ restoration. There are no paths in the pipeline; it runs the recipe.
      "rebuild_ghosts": true | false           ONLY when the person asks: in that second file (or in one at the original
                                               rate when interpolate is null) the ghost frames no neighbour can stand
                                               in for are made again from their neighbours (created frames too)
+     "rebuild_damaged": [1184, 16060]         ONLY when the person asks: these frames of the SOURCE (numbered from 0),
+                                              which whoever supervises judged to be damage (a torn or dropped-out
+                                              frame, not a flash drawn on purpose), are made again from their two
+                                              neighbours in that second file (created frames too)
      "per_kind": {"k3": {"texture": 0.5, "steps": {"deblock": "strong", "dehalo": false}}}
                                               what a kind of scene gets differently (the kinds are the ones the survey
                                               found in THIS video, probe/scenes.py): its own texture strength, another
@@ -42,7 +46,9 @@ from . import config, library
 
 FACES = ("drawn", "real")
 FIELD_FLAGS = {"interlaced", "telecine", "blended", "chroma_shift"}
-KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpolate", "rebuild_ghosts", "per_kind"}
+KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpolate", "rebuild_ghosts", "per_kind",
+        "rebuild_damaged"}
+REBUILD_MAX = 500               # frames one recipe may name: more than that is not "a few damaged frames"
 KIND = re.compile(r"^k[1-9]\d?$")
 INTERPOLATE = (2, 3, 4)
 ANIME_MODELS = {"esrgan-v3", "cugan", "cugan-pro"}
@@ -243,9 +249,19 @@ def validate(recipe: dict, blocks: dict | None = None) -> tuple[dict, list[str]]
                         "again from their neighbours in a second file; those frames are created, not original "
                         "picture, and the faithful file keeps the ghosts")
     per = _per_kind(recipe.get("per_kind"), steps, blocks)
+    remake = recipe.get("rebuild_damaged") or []
+    if (not isinstance(remake, (list, tuple)) or len(remake) > REBUILD_MAX
+            or not all(isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in remake)):
+        raise ValueError(f"rebuild_damaged is a list of at most {REBUILD_MAX} frame numbers of the source (from 0)")
+    remake = sorted(set(remake))
+    if remake:
+        warnings.append(f"rebuild_damaged: {len(remake)} frame(s) are made again from their neighbours in a second "
+                        "file; those frames are created, not original picture, and the faithful file keeps them "
+                        "as they are. A frame next to another named frame, or at a cut, cannot be made and is left")
     out = {"faces": faces, "steps": steps, "models": models, "model_strict": bool(recipe.get("model_strict")),
            "scale": scale, "texture": None if texture is None else float(texture),
-           "interpolate": None if more is None else int(more), "rebuild_ghosts": bool(again), "per_kind": per}
+           "interpolate": None if more is None else int(more), "rebuild_ghosts": bool(again), "per_kind": per,
+           "rebuild_damaged": remake}
     if uses_kinds(out):
         warnings.append(f"settings by kind of scene ({', '.join(kinds_named(out))}): the kinds are the ones the survey "
                         "found in this video (scenes.kinds); in another video the same ids are other scenes")
@@ -281,7 +297,7 @@ def from_decision(d: dict, flags: list[str] | set[str]) -> dict:
         model = None                                   # an anime model picked before the content was called real
     return {"faces": faces, "steps": steps, "models": [model] if model in config.VIDEO_MODEL_CHOICES else [],
             "model_strict": bool(d.get("model_strict")), "scale": d.get("scale"), "texture": d.get("texture"),
-            "interpolate": None, "rebuild_ghosts": False, "per_kind": {}}
+            "interpolate": None, "rebuild_ghosts": False, "per_kind": {}, "rebuild_damaged": []}
 
 
 def describe(recipe: dict) -> str:
@@ -301,6 +317,8 @@ def describe(recipe: dict) -> str:
     if recipe.get("rebuild_ghosts"):
         parts.append("ghosts in movement made again in the copy" if recipe.get("interpolate")
                      else "plus a copy with the ghosts in movement made again (created frames)")
+    if recipe.get("rebuild_damaged"):
+        parts.append(f"{len(recipe['rebuild_damaged'])} damaged frame(s) made again in a second file (created frames)")
     for kind, o in (recipe.get("per_kind") or {}).items():
         bits = [f"texture {o['texture']:g}"] if o.get("texture") is not None else []
         bits += [f"{name} {'off' if how is False else how.get('preset') or 'own settings'}"

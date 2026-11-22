@@ -840,6 +840,57 @@ def verify_rebuilt(src: Path, dst: Path, *, rebuilt: list, frames: int = 24) -> 
     return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
 
 
+REMADE_LEFT = 0.25              # share of the frames made again that may stand out as much as before
+
+
+def verify_remade(src: Path, dst: Path, *, rebuilt: list) -> GuardReport:
+    """A copy whose damaged frames were made again from their neighbours (rebuild.py), against the file it was
+    made from: same frames, duration, audio, shape; every sampled frame that was NOT made again is the input's;
+    and the frames made again stand out from their neighbours less than the damaged ones did (probe.damage's own
+    measure). The made frames are created picture: nothing here vouches for them, the record counts them."""
+    from fractions import Fraction
+
+    from ..probe import damage
+
+    src, dst = Path(src), Path(dst)
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    gates = _rate_gates(a, b, Fraction(1), Fraction(1))
+    made = sorted({int(i) for i in rebuilt})
+    total = min(a["frames"], b["frames"])
+    # the neighbours of the frames made again are the frames most at risk of a slip by one: they are all checked
+    beside = {k for i in made[:40] for k in (i - 1, i + 1) if 0 <= k < total and k not in made}
+    spread = {i for i in (int(total * (k + 0.5) / 24) for k in range(24)) if i not in made}
+    gates.append(untouched_gate(src, dst, sorted(beside | spread)))
+
+    def stands_out(files: dict, i: int) -> float | None:
+        tri = [_luma8(files[k]) if k in files else None for k in (i - 1, i, i + 1)]
+        if any(x is None for x in tri) or len({x.shape for x in tri}) != 1:
+            return None
+        small = [cv2.resize(x, (360, max(2, round(x.shape[0] * 360 / x.shape[1]))), interpolation=cv2.INTER_AREA) for x in tri]
+        return damage.stand_out(*small)
+
+    some = made[::max(1, len(made) // 24)][:24]
+    want = sorted({k for i in some for k in (i - 1, i, i + 1) if 0 <= k < total})
+    better = judged = 0
+    with tempfile.TemporaryDirectory(prefix="vidimg_remade_") as tmp:
+        fa = _frames_by_index(src, want, Path(tmp), "s", pre_vf="extractplanes=y")
+        fb = _frames_by_index(dst, want, Path(tmp), "d", pre_vf="extractplanes=y")
+        for i in some:
+            x, y = stands_out(fa, i), stands_out(fb, i)
+            if x is None or y is None:
+                continue
+            judged += 1
+            better += y < x
+    share = better / judged if judged else 0.0
+    gates.append(Gate("remade", "pass" if judged and share >= 1 - REMADE_LEFT else "fail", round(share, 3), 1 - REMADE_LEFT,
+                      f"{better} of {judged} sampled frames made again stand out from their neighbours less than the "
+                      "frames they replace"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"untouched": "frames that were not to be made again changed: the copy is not kept",
+            "remade": "the frames made again stand out as much as the damaged ones: the copy is not kept"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
 # ----------------------------------------------------------------------------- stabilised: moved, not altered
 MOVED_PSNR = 40.0               # dB after lining the frames up. Measured on an owner cut with artificial jitter:
                                 # a stabilised frame against its input 43.3 at worst (median 52.3); the same frames

@@ -1549,7 +1549,7 @@ def add_interpolation(rec: VideoRecord, recipe: dict, work: Path, encoder: str, 
     frame-rate copy the frames it was made from are found unchanged. The created frames cannot be vouched for by
     any check; the record says how many they are."""
     m, again = recipe.get("interpolate"), recipe.get("rebuild_ghosts")
-    if not (m or again) or not rec.delivered:
+    if not (m or again or recipe.get("rebuild_damaged")) or not rec.delivered:
         return rec
     started = time.time()
     try:
@@ -1564,8 +1564,9 @@ def add_interpolation(rec: VideoRecord, recipe: dict, work: Path, encoder: str, 
 
 def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn: bool, log=print) -> VideoRecord:
     m, again = recipe.get("interpolate"), recipe.get("rebuild_ghosts")
+    damaged = list(recipe.get("rebuild_damaged") or [])
     from . import rebuild as rebuild_mod
-    from .guard.video import verify_rebuilt
+    from .guard.video import verify_rebuilt, verify_remade
 
     src = Path(rec.delivered)
     info = media.probe(src, exact=True)
@@ -1573,7 +1574,7 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
     if m and (not fps or fps * m > INTERPOLATE_MAX_FPS):
         rec.notes.append(f"frame-rate copy not made: {fps:g} fps x{m} is above {INTERPOLATE_MAX_FPS - 1:g} fps")
         m = None
-        if not again:
+        if not again and not damaged:
             return rec
     idir = work / "interpolate"
     shutil.rmtree(idir, ignore_errors=True)
@@ -1614,10 +1615,39 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
                 why = r.get("error") or ("its check failed: " + ", ".join(rep_.failed()) if rep_ is not None else "failed")
                 log(f"   ghost frames in movement: not made again ({why})")
                 rec.notes.append(f"ghost frames in movement not made again: {why}")
-    if not m and not made_again:
+    remade = 0
+    if damaged:
+        # named by their number in the SOURCE. After a step that changed the frame count they are found by their
+        # time; a frame beside another named frame has no sound neighbour to be made from and is left
+        origin = Path(rec.source)
+        n_src = media.probe(origin, exact=True)["frames"] if origin.exists() else info["frames"]
+        here = sorted({i if n_src == info["frames"] else round(i * info["frames"] / max(1, n_src)) for i in damaged})
+        ok = [i for i in here if 0 < i < info["frames"] - 1 and i - 1 not in here and i + 1 not in here]
+        left = len(here) - len(ok)
+        rec.prepass["rebuild_damaged"] = {"asked": len(damaged), "made_from_neighbours": len(ok), "left": left,
+                                          "by_time": n_src != info["frames"]}
+        if left:
+            rec.notes.append(f"{left} of the {len(damaged)} damaged frames named were left as they are: each sits "
+                             "beside another named frame or at the very start or end, so it has no sound neighbour")
+        if ok:
+            fixed = idir / "remade" / "feed.mkv"
+            r = rebuild_mod.rebuild(feed, fixed, ok, idir / "remake", drawn=drawn, log=log, what="damaged frames")
+            rep_ = verify_remade(feed, fixed, rebuilt=ok) if r.get("ok") else None
+            rec.prepass["rebuild_damaged"].update(r, guard_passed=bool(rep_ and rep_.passed), guard={} if rep_ is None else {
+                g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates})
+            if rep_ is not None and rep_.passed:
+                log(f"   damaged frames: {len(ok)} made again from their neighbours, guard PASS")
+                feed.unlink(missing_ok=True)
+                feed, remade = fixed, len(ok)
+            else:
+                why = r.get("error") or ("its check failed: " + ", ".join(rep_.failed()) if rep_ is not None else "failed")
+                log(f"   damaged frames: not made again ({why})")
+                rec.notes.append(f"damaged frames not made again: {why}")
+    if not m and not made_again and not remade:
         shutil.rmtree(idir, ignore_errors=True)
         return rec
-    name = f"{src.stem}_{fps * m:.0f}fps" if m else f"{src.stem}_ghosts_rebuilt"
+    name = (f"{src.stem}_{fps * m:.0f}fps" if m else
+            f"{src.stem}_frames_rebuilt" if remade else f"{src.stem}_ghosts_rebuilt")
     dst = src.with_name(name + src.suffix)
     tmp = idir / "out" / dst.name
     if m:
@@ -1666,10 +1696,13 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
         parts.append(f"{between} were created between the frames by RIFE")
     if made_again:
         parts.append(f"{made_again} ghost frames that no neighbour could stand in for were made again from their neighbours")
+    if remade:
+        parts.append(f"{remade} damaged frames were made again from their neighbours")
     rec.notes.append(f"a second file ({dst.name}) was written because it was asked for: of its {made} frames, "
                      + " and ".join(parts) + ". Those are not original picture (they can morph fast movement); every "
                      "other frame in it is unchanged. The faithful file at the original rate is the delivered one"
-                     + (", and keeps those ghosts" if made_again else "") + (f"; {side}" if side else ""))
+                     + (", and keeps those ghosts" if made_again else "")
+                     + (", and keeps the damaged frames as they are" if remade else "") + (f"; {side}" if side else ""))
     try:
         (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
     except OSError:
