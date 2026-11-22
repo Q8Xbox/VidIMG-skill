@@ -1664,7 +1664,9 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
             r = rebuild_mod.rebuild(feed, fixed, ok, idir / "remake", drawn=drawn, log=log, what="damaged frames",
                                     regions=True)
             rep_ = verify_remade(feed, fixed, rebuilt=ok) if r.get("ok") else None
-            rec.prepass["rebuild_damaged"].update(r, guard_passed=bool(rep_ and rep_.passed), guard={} if rep_ is None else {
+            # "asked" stays the number of frames NAMED (the rebuild reports how many it was given under that word)
+            rec.prepass["rebuild_damaged"].update({k: v for k, v in r.items() if k != "asked"},
+                                                  guard_passed=bool(rep_ and rep_.passed), guard={} if rep_ is None else {
                 g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates})
             if rep_ is not None and rep_.passed:
                 log(f"   damaged frames: {len(ok)} made again from their neighbours, guard PASS")

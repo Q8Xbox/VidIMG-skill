@@ -96,3 +96,27 @@ def test_the_survey_gives_an_estimate_for_the_recipe_as_it_stands(tmp_path, monk
     plan = auto.decide(tmp_path, {"v1": {"recipe": {"faces": "drawn", "models": ["esrgan-v3"], "scale": 1}}})
     again = auto.summary(plan)["items"][0]["estimate"]
     assert again["model"] == "anime esrgan-v3" and again["minutes"] != first["minutes"]
+
+
+def test_a_second_file_at_the_original_rate_is_counted_too(tmp_path):
+    plain = estimate.estimate(SD, _recipe(models=["esrgan-v3"], scale=2), tmp_path)
+    torn = estimate.estimate(SD, _recipe(models=["esrgan-v3"], scale=2, rebuild_damaged=[10, 11, 40]), tmp_path)
+    ghosts = estimate.estimate(SD, _recipe(models=["esrgan-v3"], scale=2, rebuild_ghosts=True), tmp_path)
+    assert "second_file" not in plain["stages_min"]
+    # the whole video is copied, written again, checked and encoded: tens of minutes, however few frames are made
+    assert 25 < torn["stages_min"]["second_file"] < 60 and torn["minutes"] > plain["minutes"] + 25
+    assert ghosts["stages_min"]["second_file"] == torn["stages_min"]["second_file"]
+    # with a frame-rate copy the frames are made again on the way to it: a small addition, not a file of its own
+    smooth = estimate.estimate(SD, _recipe(models=["esrgan-v3"], scale=2, interpolate=2), tmp_path)
+    both = estimate.estimate(SD, _recipe(models=["esrgan-v3"], scale=2, interpolate=2, rebuild_damaged=[10]), tmp_path)
+    assert 5 < both["stages_min"]["second_file"] - smooth["stages_min"]["second_file"] < 12
+    # a timed run of this kind sets the rate for the next one
+    rcp = _recipe(models=["esrgan-v3"], scale=2, rebuild_damaged=[10])
+    record = {"delivered": "x.mp4", "chosen": "anime esrgan-v3", "final_gates": {},
+              "timings": {"previews": 60.0, "model": 1000.0, "finish": 500.0, "check": 100.0, "second_file": 600.0},
+              "work_done": {"frames": 10000, "in_megapixels": 0.3, "out_megapixels": 1.2, "same_size_anime": False}}
+    cases.record("C:/v/b.mkv", {"flags": []}, rcp, record, tmp_path)
+    got = estimate.learned(tmp_path)
+    assert got["second_file_rebuild"] == [20.0] and "second_file" not in got
+    again = estimate.estimate({"width": 632, "height": 474, "frames": 10000}, rcp, tmp_path)
+    assert abs(again["stages_min"]["second_file"] - 10.0) < 0.6 and "second_file_rebuild" in again["basis"]

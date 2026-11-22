@@ -39,6 +39,11 @@ BUILT_IN = {
                                         # six whole videos this way; per output megapixel alone it was 10-35
     "steps": 45.0,                      # megapixels read, per step, render and check together
     "second_file": 25.0,                # megapixel-frames of the copy
+    "second_file_rebuild": 17.0,        # megapixel-frames of the result, for a second file at the original rate
+                                        # (ghosts or damaged frames made again). It was not counted at all at
+                                        # first: making a few dozen frames takes minutes, but the whole video is
+                                        # copied losslessly, written again, checked and encoded. Three runs of
+                                        # one owner episode: 40, 46 and 50 minutes that no estimate mentioned
 }
 FIXED = {"previews": 90.0, "check": 150.0, "rebuild_ghosts": 480.0}      # seconds, largely independent of size
 SLOW_INPUT_MODELS = ("free realesrnet", "free bsrnet")                  # rated by what they read, not what they write
@@ -92,9 +97,12 @@ def learned(where: Path | None = None) -> dict:
         n_steps = len((c.get("recipe") or {}).get("steps") or [])
         if n_steps and t.get("steps", 0) > 5:
             out.setdefault("steps", []).append(frames * mp_in * n_steps / t["steps"])
-        mult = (c.get("recipe") or {}).get("interpolate")
+        rcp = c.get("recipe") or {}
+        mult = rcp.get("interpolate")
         if mult and t.get("second_file", 0) > 5:
             out.setdefault("second_file", []).append(frames * mult * mp_out / t["second_file"])
+        elif (rcp.get("rebuild_ghosts") or rcp.get("rebuild_damaged")) and t.get("second_file", 0) > 5:
+            out.setdefault("second_file_rebuild", []).append(frames * mp_out / t["second_file"])
     return out
 
 
@@ -127,10 +135,13 @@ def estimate(work: dict, recipe: dict, where: Path | None = None) -> dict | None
               "finish": frames * (mp_out + mp_in) / rate("finish"),
               "check": FIXED["check"]}
     extra = 0.0
+    again = recipe.get("rebuild_ghosts") or recipe.get("rebuild_damaged")
     if recipe.get("interpolate"):
         extra += frames * recipe["interpolate"] * mp_out / rate("second_file")
-    if recipe.get("rebuild_ghosts"):
-        extra += FIXED["rebuild_ghosts"]
+        if again:
+            extra += FIXED["rebuild_ghosts"]             # made again on the way to the frame-rate copy
+    elif again:
+        extra += frames * mp_out / rate("second_file_rebuild")   # a whole second file at the original rate
     if extra:
         stages["second_file"] = extra
     total = sum(stages.values())

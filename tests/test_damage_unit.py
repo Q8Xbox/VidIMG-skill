@@ -204,6 +204,7 @@ def test_named_frames_are_made_again_in_a_second_file_and_the_faithful_file_keep
     assert calls == [[10, 40, 41, 77]] and asked_regions == [True]
     assert rec.interpolated == str(copy) and copy.read_bytes() == b"remade"
     assert rec.prepass["rebuild_damaged"]["in_runs"] == 2
+    assert rec.prepass["rebuild_damaged"]["asked"] == 6 and rec.prepass["rebuild_damaged"]["made_from_neighbours"] == 4
     assert faithful.read_bytes() == b"faithful" and rec.delivered == str(faithful)
     assert any("2 of the 6 damaged frames named were left as they are" in n for n in rec.notes)
     assert "4 damaged frames were made again from their neighbours" in rec.notes[-1]
