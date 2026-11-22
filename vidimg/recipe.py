@@ -11,6 +11,9 @@ restoration. There are no paths in the pipeline; it runs the recipe.
      "interpolate": 2 | 3 | 4 | null}         ONLY when the person asks: also write a copy at that many times the frame
                                               rate, with frames created between the originals (RIFE). The faithful
                                               file is still delivered; the copy says what part of it is invented
+     "rebuild_ghosts": true | false           ONLY when the person asks: in that second file (or in one at the original
+                                              rate when interpolate is null) the ghost frames no neighbour can stand
+                                              in for are made again from their neighbours (created frames too)
 
 `faces` is a statement about the content, separate from the choice of model: routing by "anime or real" used to set
 both at once, and a cartoon kept at its own size was judged as if its faces were people's (owner sample,
@@ -25,7 +28,7 @@ from . import config, library
 
 FACES = ("drawn", "real")
 FIELD_FLAGS = {"interlaced", "telecine", "blended", "chroma_shift"}
-KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpolate"}
+KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpolate", "rebuild_ghosts"}
 INTERPOLATE = (2, 3, 4)
 ANIME_MODELS = {"esrgan-v3", "cugan", "cugan-pro"}
 
@@ -126,9 +129,16 @@ def validate(recipe: dict, blocks: dict | None = None) -> tuple[dict, list[str]]
             raise ValueError(f"interpolate must be one of {INTERPOLATE} (how many times the frame rate), or null")
         warnings.append(f"interpolate x{more}: {more - 1} of every {more} frames of that file will be created, not "
                         "original picture; it is written beside the faithful file, only because the person asked")
+    again = recipe.get("rebuild_ghosts")
+    if again not in (None, True, False):
+        raise ValueError("rebuild_ghosts must be true or false")
+    if again:
+        warnings.append("rebuild_ghosts: ghost frames that no neighbour can stand in for (fast movement, cuts) are made "
+                        "again from their neighbours in a second file; those frames are created, not original "
+                        "picture, and the faithful file keeps the ghosts")
     out = {"faces": faces, "steps": steps, "models": models, "model_strict": bool(recipe.get("model_strict")),
            "scale": scale, "texture": None if texture is None else float(texture),
-           "interpolate": None if more is None else int(more)}
+           "interpolate": None if more is None else int(more), "rebuild_ghosts": bool(again)}
     return out, warnings
 
 
@@ -156,7 +166,7 @@ def from_decision(d: dict, flags: list[str] | set[str]) -> dict:
         model = None                                   # an anime model picked before the content was called real
     return {"faces": faces, "steps": steps, "models": [model] if model in config.VIDEO_MODEL_CHOICES else [],
             "model_strict": bool(d.get("model_strict")), "scale": d.get("scale"), "texture": d.get("texture"),
-            "interpolate": None}
+            "interpolate": None, "rebuild_ghosts": False}
 
 
 def describe(recipe: dict) -> str:
@@ -172,4 +182,7 @@ def describe(recipe: dict) -> str:
         parts.append(f"texture {recipe['texture']:g}")
     if recipe.get("interpolate"):
         parts.append(f"plus a x{recipe['interpolate']} frame-rate copy (created frames)")
+    if recipe.get("rebuild_ghosts"):
+        parts.append("ghosts in movement made again in the copy" if recipe.get("interpolate")
+                     else "plus a copy with the ghosts in movement made again (created frames)")
     return "; ".join(parts)

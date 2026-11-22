@@ -142,6 +142,9 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               back). "interpolate": 2 | 3 | 4 ONLY when the person asks for smoother motion or for the frames a
               low-frame-rate copy is missing: a SECOND file at that many times the frame rate is written beside
               the faithful one, with frames created between the originals; tell the person how many are created.
+              "rebuild_ghosts": true ONLY when the person asks to have the double images removed that deghost
+              cannot replace (inside a scene, in fast movement): they are made again from their neighbours in
+              that second file (alone it writes a copy at the original rate); the faithful file keeps them.
               Start from the item's proposed_recipe and its similar_cases / history, and change what the
               close-ups call for. Refused: a step that needs the source's frame numbers after one that changes
               them, and an anime model with faces "real". Advice about order comes back in the reasons,
