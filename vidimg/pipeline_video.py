@@ -758,21 +758,96 @@ def run_spans(base: Path, work: Path, p: probe.VideoProfile, log=print) -> tuple
     return dst, info
 
 
+def _said(group: list[tuple]) -> str:
+    return ", ".join(b.name + (f" ({', '.join(f'{k} {v:g}' if isinstance(v, float) else f'{k} {v}' for k, v in vals.items())})"
+                               if vals else "") for b, vals in group)
+
+
+def scene_map_for(c: dict):
+    """The scene map of the SOURCE (probe/scenes.py), made once per run: the kinds a recipe names are the ones
+    the survey found with the same code on the same file. None when it cannot be made (said once, in the notes)."""
+    if "scene_map" not in c:
+        from .probe import scenes
+        try:
+            found = scenes.scan(Path(c["src"]))
+        except Exception as e:  # noqa: BLE001
+            found = scenes.Scenes(error=f"{type(e).__name__}: {e}")
+        if found.error:
+            c["rec"].notes.append(f"no scene map ({found.error}): what the recipe sets by kind of scene was not applied")
+            c["log"](f"   no scene map: {found.error}")
+        else:
+            c["log"](f"   scene map: {len(found.scenes)} scenes of {len(found.kinds)} kinds")
+            missing = [k for k in recipe_mod.kinds_named(c.get("recipe") or {}) if k not in {x["id"] for x in found.kinds}]
+            if missing:
+                c["rec"].notes.append(f"the recipe names {', '.join(missing)}, which this video does not have "
+                                      f"(its kinds: {', '.join(x['id'] for x in found.kinds)}): ignored")
+        c["scene_map"] = None if found.error else found
+    return c["scene_map"]
+
+
+def by_kind_plan(c: dict, steps: list[dict], blocks: dict):
+    """How a group of scripted steps differs by kind of scene. None: it does not (one pass, as ever). False: it
+    should, but there is no scene map. Otherwise the variants (each a list of (block, settings); an empty one
+    leaves its stretches untouched), the stretch each belongs to, and the frames the pass's guard looks at."""
+    recipe = c.get("recipe") or {}
+    names = {s["block"] for s in steps}
+    if not any(s.get("kinds") for s in steps) and not any(
+            names & set(o.get("steps") or {}) for o in (recipe.get("per_kind") or {}).values()):
+        return None
+    found = scene_map_for(c)
+    if found is None:
+        return False
+    from .probe import scenes
+    variants: list[list[tuple]] = []
+    index: dict = {}
+    of_kind: dict = {}
+    for k in found.kinds:
+        eff = [(s["block"], recipe_mod.step_settings(recipe, s, k["id"])) for s in steps]
+        eff = [(n, v) for n, v in eff if v is not None]
+        key = json.dumps(eff, sort_keys=True)
+        if key not in index:
+            index[key] = len(variants)
+            variants.append([(blocks[n], v) for n, v in eff])
+        of_kind[k["id"]] = index[key]
+    now = media.probe(c["base"], exact=True)["frames"]
+    ranges = scenes.ranges_by(scenes.at_count(found.scenes, found.frames, now), of_kind, 0)
+    also, untouched = [], []
+    for v, var in enumerate(variants):
+        mine = sorted((r for r in ranges if r[2] == v), key=lambda r: r[0] - r[1])
+        if not mine:
+            continue
+        also.append((mine[0][0] + mine[0][1]) // 2)             # the longest stretch of each variant
+        if not var:
+            step = max(1, len(mine) // 12)
+            untouched = [(a + z) // 2 for a, z, _ in mine[::step]][:12]
+    said = "; ".join(f"{', '.join(k for k, i in of_kind.items() if i == v)}: {_said(var) or 'left as it is'}"
+                     for v, var in enumerate(variants))
+    return {"variants": variants, "ranges": ranges, "of_kind": of_kind, "also": sorted(set(also)),
+            "untouched": untouched, "said": f"by kind of scene: {said}"}
+
+
 def run_scripted(base: Path, work: Path, group: list[tuple], index: int, log=print,
-                 drawn: bool = False) -> tuple[Path | None, dict]:
+                 drawn: bool = False, by_kind: dict | None = None) -> tuple[Path | None, dict]:
     """Scripted blocks from the library (library.py) that follow one another in a recipe, as one pass.
-    group: [(block, settings), ...], all on the same engine. None when the pass was not done or did not pass its
-    guard: the caller keeps the input."""
+    group: [(block, settings), ...], all on the same engine. by_kind (by_kind_plan): the settings differ by kind
+    of scene; every variant is computed on the whole clip and each stretch taken from its own. None when the
+    pass was not done or did not pass its guard: the caller keeps the input."""
     engine = group[0][0].engine
     names = [b.name for b, _ in group]
-    said = ", ".join(b.name + (f" ({', '.join(f'{k} {v:g}' if isinstance(v, float) else f'{k} {v}' for k, v in vals.items())})"
-                                if vals else "") for b, vals in group)
+    said = by_kind["said"] if by_kind else _said(group)
     lines = [(b, library.render(b, vals)) for b, vals in group]
     for b, text in lines:
         library.check_script(b, text)
+    variant_lines: list[list[str]] = []
+    for var in (by_kind or {}).get("variants", []):
+        text_of = [(b, library.render(b, vals)) for b, vals in var]
+        for b, text in text_of:
+            library.check_script(b, text)
+        variant_lines.append([ln for _, text in text_of for ln in text])
     pdir = work / f"pass{index}_{'_'.join(names)}"[:80]
     dst, done = pdir / "pass.nut", pdir / "pass.done"
-    made_by = fingerprint(base.name, base.stat().st_size, engine, [t for _, t in lines])
+    made_by = fingerprint(base.name, base.stat().st_size, engine, [t for _, t in lines],
+                          *([variant_lines, by_kind["ranges"]] if by_kind else []))
     if dst.exists() and done.exists():
         info = json.loads(done.read_text(encoding="utf-8"))
         if info.get("fingerprint") == made_by:
@@ -787,7 +862,9 @@ def run_scripted(base: Path, work: Path, group: list[tuple], index: int, log=pri
         ok, why = avs.available()
         if not ok:
             return None, info | {"skipped": f"AviSynth+ not available ({why})"}
-        r = avs.render(base, dst, [avs.Lines(text, b.name) for b, text in lines], work=pdir)
+        stages = ([avs.ByRanges(variant_lines, by_kind["ranges"])] if by_kind
+                  else [avs.Lines(text, b.name) for b, text in lines])
+        r = avs.render(base, dst, stages, work=pdir)
         info.update(ok=r.ok, error=r.error, script=r.details.get("script"), frames=r.details.get("frames"))
     else:
         if avs.is_full_range(colour):
@@ -808,8 +885,12 @@ def run_scripted(base: Path, work: Path, group: list[tuple], index: int, log=pri
         # a pass that moves the picture has a check of its own (the video guard compares frames in place)
         rep_ = verify_moved(base, dst, max_shift=max(float(vals.get("shift", 0)) for _, vals in group))
     else:
-        rep_ = verify_cleanup(base, dst, deblocked=any((b.effect or {}).get("metric") == "blockiness" for b, _ in group),
-                              drawn_faces=drawn)
+        # a filter that must lower the block level is held to that only when every kind of scene gets it: the
+        # level is read in the middle of the video, where the kinds that get it may not be
+        sets = by_kind["variants"] if by_kind else [group]
+        rep_ = verify_cleanup(base, dst, drawn_faces=drawn,
+                              deblocked=all(any((b.effect or {}).get("metric") == "blockiness" for b, _ in g) for g in sets),
+                              also=(by_kind or {}).get("also"), untouched=(by_kind or {}).get("untouched"))
     info["guard"] = {g.name: {"status": g.status, "value": g.value} for g in rep_.gates}
     info["guard_passed"] = rep_.passed
     log(f"   {said}: guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
@@ -982,13 +1063,24 @@ def run_steps(c: dict, steps: list[dict], blocks: dict) -> bool:
                 return False
             i += 1
             continue
-        group = []
+        group, asked = [], []
         while (i < len(steps) and blocks[steps[i]["block"]].engine == b.engine
                and blocks[steps[i]["block"]].check == b.check):
             group.append((blocks[steps[i]["block"]], steps[i].get("settings") or {}))
+            asked.append(steps[i])
             i += 1
         n += 1
-        out, info = run_scripted(c["base"], c["work"], group, n, c["log"], drawn=c["drawn"])
+        plan = by_kind_plan(c, asked, blocks)
+        if plan is False:
+            c["rec"].notes.append(f"clean-up asked for by kind of scene but not applied ({_said(group)}): no scene map")
+            continue
+        if plan and len(plan["variants"]) == 1:              # every kind this video has gets the same
+            group, plan = plan["variants"][0], None
+            if not group:
+                c["rec"].notes.append("clean-up asked for only in kinds of scene this video does not have: "
+                                      f"{', '.join(s['block'] for s in asked)} not applied")
+                continue
+        out, info = run_scripted(c["base"], c["work"], group, n, c["log"], drawn=c["drawn"], by_kind=plan)
         c["rec"].prepass[f"pass{n}"] = info
         if out is not None:
             c["base"] = out
@@ -1365,7 +1457,8 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
                 encoder: str, on_progress, log) -> VideoRecord:
     # every step before the model is its own guarded pass on progressive frames; one that fails leaves the video
     # as it was (only failed field handling stops the run: nothing can be built on woven fields)
-    ctx = {"base": src, "shape_ref": src, "work": work, "prof": prof, "rec": rec, "log": log, "drawn": drawn}
+    ctx = {"base": src, "shape_ref": src, "work": work, "prof": prof, "rec": rec, "log": log, "drawn": drawn,
+           "src": src, "recipe": recipe}
     t0 = time.time()
     done = run_steps(ctx, recipe["steps"], blocks)
     rec.timings["steps"] = round(time.time() - t0, 1)
@@ -1381,7 +1474,7 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
         rec.notes.append("resumed: model choice and previews reused from the checkpoint")
         log(f"   choice: {rec.chosen} (reused from checkpoint)")
         return add_interpolation(_full_run(src, out_dir, work, base, prof, rec, dict(cands)[rec.chosen], encoder,
-                                           on_progress, log, drawn=drawn, shape_ref=shape_ref),
+                                           on_progress, log, drawn=drawn, shape_ref=shape_ref, kinds=ctx),
                                  recipe, work, encoder, drawn, log)
     t0 = time.time()
     starts = _preview_starts(prof)
@@ -1430,7 +1523,7 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
         rec.notes.append("preview only: full run not started")
         return rec
     return add_interpolation(_full_run(src, out_dir, work, base, prof, rec, chosen[1], encoder, on_progress, log,
-                                       drawn=drawn, shape_ref=shape_ref), recipe, work, encoder, drawn, log)
+                                       drawn=drawn, shape_ref=shape_ref, kinds=ctx), recipe, work, encoder, drawn, log)
 
 
 INTERPOLATE_MAX_FPS = 61.0      # nothing is gained above 60 fps
@@ -1586,11 +1679,17 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
 
 def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.VideoProfile, rec: VideoRecord,
               make: Callable[[], list], encoder: str, on_progress, log, drawn: bool = False,
-              shape_ref: Path | None = None) -> VideoRecord:
+              shape_ref: Path | None = None, kinds: dict | None = None) -> VideoRecord:
+    """kinds: the run's context (its recipe and scene map) when the recipe treats kinds of scene differently."""
     chosen = (rec.chosen, make)
     ref_vf = None
     dst = out_dir / f"{work.name}_restored{output_suffix(src, encoder)}"   # work.name: the stem (see work_key)
-    strength = config.TEXTURE_STRENGTH
+    base_strength = config.TEXTURE_STRENGTH
+    recipe = (kinds or {}).get("recipe") or {}
+    found = scene_map_for(kinds) if kinds and recipe_mod.uses_kinds(recipe) else None
+    by_kind = {k["id"]: recipe_mod.texture_for(recipe, k["id"], base_strength) for k in found.kinds} if found else {}
+    by_kind = {k: v for k, v in by_kind.items() if v != base_strength}
+    strength = max([base_strength, *by_kind.values()])      # whether there is a texture pass at all
     # texture return: the model writes a lossless intermediate (an NVENC QP 16 one lost a third of what the pass
     # gives back: flat area 0.28 vs 0.19 lossless, source 0.18), the pass writes the deliverable
     model_out, model_enc = dst, encoder
@@ -1621,10 +1720,16 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
         return rec
     if strength > 0:
         final_enc = "hevc10-grain" if encoder == "hevc10" else encoder
-        log(f"   returning source texture (strength {strength:g}, final encode {final_enc})")
-        t = texture_pass.apply(base, model_out, dst, strength, final_enc)
+        stretches = None
+        if by_kind:
+            from .probe import scenes
+            here = scenes.at_count(found.scenes, found.frames, media.probe(model_out, exact=True)["frames"])
+            stretches = [r for r in scenes.ranges_by(here, by_kind) if r[2] is not None]
+        told = f"strength {base_strength:g}" + "".join(f", in {k} {v:g}" for k, v in by_kind.items())
+        log(f"   returning source texture ({told}, final encode {final_enc})")
+        t = texture_pass.apply(base, model_out, dst, base_strength, final_enc, strengths=stretches)
         if t.ok:
-            rec.notes.append(f"source texture returned between the lines (strength {strength:g}); final encode "
+            rec.notes.append(f"source texture returned between the lines ({told}); final encode "
                              f"{final_enc}")
             media.fix_av_offset(base, dst)
             model_out.unlink(missing_ok=True)
@@ -1647,7 +1752,17 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
         rec.notes.append(aspect)
     rec.timings["finish"] = round(time.time() - t0, 1)
     t0 = time.time()
-    final = verify_video(base, dst, reference_vmaf=None, src_vf=ref_vf, drawn_faces=drawn)
+    also = None
+    if found:                                               # a frame of every kind, whatever share of the video it holds
+        try:
+            n_base = media.probe(base, exact=True)["frames"]
+            also = sorted({max(0, min(n_base - 2, round(k["example_frames"][0] * n_base / found.frames)))
+                           for k in found.kinds if k.get("example_frames")})
+            rec.notes.append(f"the final check also judged a frame of every kind of scene "
+                             f"({', '.join(k['id'] + ' ' + k['name'] for k in found.kinds)})")
+        except Exception:  # noqa: BLE001  (the evenly spaced frames are still judged)
+            also = None
+    final = verify_video(base, dst, reference_vmaf=None, src_vf=ref_vf, drawn_faces=drawn, also=also)
     rec.timings["check"] = round(time.time() - t0, 1)
     try:                                                    # what the stages worked on, for the next estimate
         made, fed = media.probe(dst, exact=True), media.probe(base)

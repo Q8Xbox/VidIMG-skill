@@ -79,6 +79,12 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
     a scene in fast movement are mixes of two pictures the file holds nowhere else: no neighbour can stand in
     for them, so the faithful file keeps them. On request (`rebuild_ghosts`) they are made again from their two
     neighbours by RIFE, in the second file only, with the count in the record.
+  - **Settings by kind of scene.** The survey splits each video at its cuts and sorts the scenes into up to six
+    kinds by light, motion and detail, with a sheet showing each. A recipe's `per_kind` gives a kind its own
+    texture strength, another strength of a filter, or leaves a filter out there; a step's `kinds` limits it to
+    some kinds. One model serves the whole video. Every variant of a filter is computed on the whole clip and
+    each stretch is taken from its own; the pass's check confirms that stretches a filter leaves out are
+    untouched, and the final check judges a frame of every kind.
   - **Created frames only on request.** A recipe's `interpolate` (2, 3 or 4) writes a second file at that many
     times the frame rate, with frames created between the originals (RIFE), beside the faithful file, which is
     still the delivered one. The guard confirms the original frames are unchanged in the copy; nothing can vouch

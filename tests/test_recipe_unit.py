@@ -151,7 +151,7 @@ def test_steps_run_in_the_recipes_order_and_scripted_neighbours_share_a_pass(mon
     blocks = library.load(Path("no/such"))[0]
     ran = []
 
-    def scripted(base, work, group, index, log=print, drawn=False):
+    def scripted(base, work, group, index, log=print, drawn=False, by_kind=None):
         ran.append(("pass", [b.name for b, _ in group], [v for _, v in group], drawn))
         return Path(f"{base}+{index}"), {"said": "+".join(b.name for b, _ in group)}
 
@@ -366,7 +366,7 @@ def test_only_a_shipped_block_may_name_a_check_and_a_moved_picture_orders_the_re
 def test_a_moving_step_gets_its_own_pass_and_its_own_check(monkeypatch, tmp_path):
     blocks = library.load(Path("no/such"))[0]
     ran = []
-    monkeypatch.setattr(pv, "run_scripted", lambda base, work, group, index, log=print, drawn=False: (
+    monkeypatch.setattr(pv, "run_scripted", lambda base, work, group, index, log=print, drawn=False, by_kind=None: (
         ran.append([b.name for b, _ in group]) or (Path(f"{base}+{index}"), {"said": "x"})))
     rcp = recipe.validate({"faces": "real", "steps": ["dehalo", "stabilise", "deblock"]}, blocks)[0]
     ctx = {"base": Path("src"), "shape_ref": Path("src"), "work": tmp_path, "prof": None,

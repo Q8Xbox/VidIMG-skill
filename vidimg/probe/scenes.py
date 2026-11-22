@@ -199,3 +199,34 @@ def spans_of(scenes: list, kind: str) -> list[list[int]]:
         else:
             out.append([a, z])
     return out
+
+
+def at_count(scenes: list, frames: int, now: int) -> list:
+    """The map on a version of the video that has `now` frames over the same duration (after a step that removed
+    copies or blends): every scene keeps its share of the running time. With the same count, the map itself."""
+    if now == frames or not frames:
+        return [list(x) for x in scenes]
+    out = []
+    for a, z, k in scenes:
+        a2, z2 = round(a * now / frames), round((z + 1) * now / frames) - 1
+        if z2 >= a2:
+            out.append([a2, z2, k])
+    if out:
+        out[0][0], out[-1][1] = 0, now - 1
+    return out
+
+
+def ranges_by(scenes: list, value: dict, default=None) -> list:
+    """[first, last, value of the scene's kind], neighbouring stretches with the same value joined."""
+    out: list = []
+    for a, z, k in scenes:
+        v = value.get(k, default)
+        if out and out[-1][2] == v and out[-1][1] == a - 1:
+            out[-1][1] = z
+        else:
+            out.append([a, z, v])
+    return out
+
+
+def kind_at(scenes: list, frame: int) -> str | None:
+    return next((k for a, z, k in scenes if a <= frame <= z), None)

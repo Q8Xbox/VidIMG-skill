@@ -54,8 +54,9 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    picture area outlined, a strip of consecutive frames) and `findings` (defects measured but corrected only on
    your decision), and `scenes`: the kinds of scene it is made of (sorted by light, motion and detail, with the
    share of the video each kind holds and how often double images occur in it) and `scenes.sheet`, one image
-   with frames of each kind. One recipe serves all kinds for now: compose it for the kinds that hold most of the
-   video, check on the sheet that it will not hurt the others, and tell the person which kinds it suits less.
+   with frames of each kind. Compose the recipe for the kinds that hold most of the video; where another kind
+   wants something else, say so in the recipe's `per_kind` (its own texture strength, another preset of a step,
+   or a step left out) or limit a step with `kinds`. One model serves the whole video; single videos only.
    There are no fixed paths. Each video also comes with `proposed_recipe` (the analysis' starting point),
    `similar_cases` (earlier videos like it: the recipe they got, what the guard said, how the result was
    judged) and `history` (this file's own earlier runs); the survey result lists the `blocks` you compose from.

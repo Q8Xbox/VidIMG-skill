@@ -198,8 +198,11 @@ def plan_samples(duration: float) -> int:
 
 def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_seconds: float = 20.0,
                  interpolated: bool = False, reference_vmaf: float | None = None,
-                 src_vf: str | None = None, src_rate: float = 1.0, drawn_faces: bool = False) -> GuardReport:
-    """reference_vmaf: VMAF of the reference candidate's output on the same clip (from a previous
+                 src_vf: str | None = None, src_rate: float = 1.0, drawn_faces: bool = False,
+                 also: list[int] | None = None) -> GuardReport:
+    """also: frame numbers judged in addition to the evenly spaced ones (one of every kind of scene, when a
+    recipe treats the kinds differently: an evenly spaced sample can miss a kind that holds 3 % of the video).
+    reference_vmaf: VMAF of the reference candidate's output on the same clip (from a previous
     verify_video call); when given, this output may score at most vmaf_drop_max below it.
     src_vf: filter applied to the source before comparison. Interlaced sources are compared after a
     conventional deinterlace ("bwdif=mode=send_frame"): the raw combed frames are not a valid
@@ -275,7 +278,9 @@ def verify_video(src: Path, dst: Path, *, samples: int | None = None, vmaf_secon
     # was never decoded: the count grows with the length
     samples = samples or plan_samples(a["duration"])
     starts =[int(n * (i + 0.5) / samples) for i in range(samples)]
-    starts = [s for s in starts if s + 1 < n]
+    if also and not interpolated:
+        starts = sorted(set(starts) | {int(s) for s in also})
+    starts = [s for s in starts if 0 <= s and s + 1 < n]
     ratio = b["frames"] / max(1, src_frames)
     if interpolated:
         # RIFE at a whole multiplier m writes m*n - (m-1) frames: nothing is created after the last one. The ratio
@@ -677,12 +682,35 @@ def block_level(path: Path, seconds: float = 60.0) -> float | None:
     return float(found[-1]) if found else None
 
 
-def verify_cleanup(src: Path, dst: Path, *, deblocked: bool = False, drawn_faces: bool = False) -> GuardReport:
+def untouched_gate(src: Path, dst: Path, frames: list[int]) -> Gate:
+    """Frames a pass was told to leave alone must be the input's (SPANS_SAME_PSNR: decoders round differently)."""
+    worst = None
+    with tempfile.TemporaryDirectory(prefix="vidimg_same_") as tmp:
+        fa = _frames_by_index(src, frames, Path(tmp), "s", pre_vf="extractplanes=y")
+        fb = _frames_by_index(dst, frames, Path(tmp), "d", pre_vf="extractplanes=y")
+        for i in frames:
+            if i not in fa or i not in fb:
+                continue
+            x, y = _luma8(fa[i]), _luma8(fb[i])
+            if x is None or y is None or x.shape != y.shape:
+                continue
+            p = float(10 * np.log10(255 ** 2 / max(float(np.mean((x - y) ** 2)), 1e-6)))
+            worst = p if worst is None else min(worst, p)
+    return Gate("untouched", "pass" if worst is not None and worst >= SPANS_SAME_PSNR else "fail",
+                None if worst is None else round(worst, 1), SPANS_SAME_PSNR,
+                f"{len(frames)} frames of the stretches the pass leaves out, against the input (lowest)")
+
+
+def verify_cleanup(src: Path, dst: Path, *, deblocked: bool = False, drawn_faces: bool = False,
+                   also: list[int] | None = None, untouched: list[int] | None = None) -> GuardReport:
     """A clean-up pass (deblock, dehalo) against its input: every gate of the video guard (the result is still
     this video: structure, colour, faces, no added flicker), and a filter that was asked to remove blocks must
-    have removed some."""
-    rep = verify_video(src, dst, drawn_faces=drawn_faces)
+    have removed some. also: frames judged besides the evenly spaced ones (one per kind of scene). untouched:
+    frames of stretches the pass was told to leave out; they must be the input's."""
+    rep = verify_video(src, dst, drawn_faces=drawn_faces, also=also)
     gates = list(rep.gates)
+    if untouched:
+        gates.append(untouched_gate(src, dst, untouched))
     if deblocked:
         before, after = block_level(src), block_level(dst)
         ok = before is not None and after is not None and after < before
@@ -690,7 +718,8 @@ def verify_cleanup(src: Path, dst: Path, *, deblocked: bool = False, drawn_faces
                           f"block edges {before} before, {after} after"))
     failed = [g.name for g in gates if g.status == "fail"]
     return GuardReport(not failed, gates, list(rep.suggestions) + (
-        ["deblocking removed no block edges: keep the input"] if "blocks" in failed else []), False)
+        ["deblocking removed no block edges: keep the input"] if "blocks" in failed else []) + (
+        ["frames of a kind the pass leaves out were changed: keep the input"] if "untouched" in failed else []), False)
 
 
 # ----------------------------------------------------------------------------- ghost frames replaced
