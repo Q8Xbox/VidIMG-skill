@@ -52,7 +52,10 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    guide, scale, texture) and its reasons, plus `contact_sheets`: all videos' frame sheets on a few labelled images.
    Each video also has `closeups` (one image: line art enlarged without smoothing, the frame with the measured
    picture area outlined, a strip of consecutive frames) and `findings` (defects measured but corrected only on
-   your decision).
+   your decision), and `scenes`: the kinds of scene it is made of (sorted by light, motion and detail, with the
+   share of the video each kind holds and how often double images occur in it) and `scenes.sheet`, one image
+   with frames of each kind. One recipe serves all kinds for now: compose it for the kinds that hold most of the
+   video, check on the sheet that it will not hurt the others, and tell the person which kinds it suits less.
    There are no fixed paths. Each video also comes with `proposed_recipe` (the analysis' starting point),
    `similar_cases` (earlier videos like it: the recipe they got, what the guard said, how the result was
    judged) and `history` (this file's own earlier runs); the survey result lists the `blocks` you compose from.

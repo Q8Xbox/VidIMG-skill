@@ -145,6 +145,7 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
     except Exception as e:  # noqa: BLE001  (an aid for the decision; the survey goes on without it)
         close = None
         log(f"   {item_id}: close-ups failed ({e})")
+    scene_map = _scene_map(item_id, src, out, log)
     start = {"content": "anime" if anime else "auto", "model": guide["suggested"]}
     try:
         proposed = recipe_mod.validate(recipe_mod.from_decision(start, prof.flags))[0]
@@ -152,7 +153,7 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
         proposed = None
     it = {"id": item_id, "source": str(src), "profile_flags": prof.flags,
           "findings": findings or None, "closeups": str(close) if close else None,
-          "proposed_recipe": proposed,
+          "proposed_recipe": proposed, "scenes": scene_map,
           "work": {"width": prof.width, "height": prof.height, "frames": prof.frames, "fps": prof.fps},
           "gaps": library.gaps(prof.flags) or None,
           "similar_cases": cases.similar(prof.to_dict(), 3, exclude_source=str(src)) or None,
@@ -168,10 +169,34 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
                        "remove_repeats": False, "crop_borders": False, "filters": [], "recipe": None},
           "decided_by": "analysis", "reasons": list(guide["why"]),
           "needs_look": "confirm on the contact sheet: drawn (anime) or real footage"
-                        + ("; judge each finding on the close-ups" if findings else ""), "state": "pending"}
+                        + ("; judge each finding on the close-ups" if findings else "")
+                        + ("; look at the kinds of scene on scenes.sheet" if (scene_map or {}).get("sheet") else ""),
+          "state": "pending"}
     log(f"   {item_id}: {src.name}: {it['size']}; flags {', '.join(prof.flags) or 'none'}; "
         f"suggested {guide['suggested']}")
     return it
+
+
+def _scene_map(item_id: str, src: Path, out: Path, log) -> dict | None:
+    """Where the video cuts and what kinds of scene it holds (probe.scenes): the whole map in a file of its own,
+    the kinds and a sheet showing each in the plan. An aid for the decision: the survey goes on without it."""
+    try:
+        from .probe import scenes
+        from .report import closeups
+        t0 = time.time()
+        found = scenes.scan(src)
+        if found.error:
+            log(f"   {item_id}: no scene map ({found.error})")
+            return None
+        where = out / "survey" / f"{item_id}_scenes.json"
+        statefile.write_json(where, found.to_dict())
+        sheet = closeups.kinds_sheet(src, out / "survey" / f"{item_id}_scene_kinds.jpg", found.kinds,
+                                     title=f"{item_id}  {src.name}: {len(found.scenes)} scenes of {len(found.kinds)} kinds")
+        log(f"   {item_id}: {len(found.scenes)} scenes of {len(found.kinds)} kinds ({time.time() - t0:.0f} s)")
+        return {"count": len(found.scenes), "kinds": found.kinds, "map": str(where), "sheet": str(sheet) if sheet else None}
+    except Exception as e:  # noqa: BLE001
+        log(f"   {item_id}: scene map failed ({e})")
+        return None
 
 
 def _findings(prof) -> list[dict]:
@@ -366,7 +391,7 @@ def summary(plan: dict) -> dict:
                        est_hours=it.get("est_hours"), needs_look=it.get("needs_look"),
                        findings=it.get("findings"), closeups=it.get("closeups"),
                        proposed_recipe=it.get("proposed_recipe"), similar_cases=it.get("similar_cases"),
-                       history=it.get("history"), gaps=it.get("gaps"))
+                       history=it.get("history"), gaps=it.get("gaps"), scenes=it.get("scenes"))
             if it.get("state") == "pending" and it.get("work"):
                 # for the recipe as it stands now (the decided one, else the proposal); for a series, per episode
                 from . import estimate as estimate_mod
@@ -397,7 +422,12 @@ def _next_step(plan: dict, states: list) -> str | None:
                 "its `recipe` with decide_plan from `blocks`: say whether the faces are drawn or real, list the "
                 "steps the close-ups call for in the order you want them, name the models, the scale (1 keeps "
                 "the size) and the texture. proposed_recipe is the analysis' starting point, not a path to "
-                "follow. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
+                "follow. Each video's `scenes` says what kinds of scene it is made of (by light, "
+                "motion and detail, with the share of the video each holds and how often double images occur in "
+                "it) and scenes.sheet shows frames of each kind: one recipe has to serve them all for now, so "
+                "compose it for the kinds that hold most of the video, check on the sheet that it will not hurt "
+                "the others (a dark or flat kind shows smoothing first), and tell the person which kinds it "
+                "suits less. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
                 "each; an item's `gaps` are defects it was measured to have that no block addresses. When the "
                 "close-ups show a defect with no block (measured or not), write the block from what you know "
                 "about restoring it (add_block), compare the recipe with and without it (try_recipes), and "

@@ -197,6 +197,48 @@ def sheet(src: Path, dst: Path, *, borders: dict | None = None, repeats: dict | 
     return dst
 
 
+def kinds_sheet(src: Path, dst: Path, kinds: list[dict], *, title: str = "") -> Path | None:
+    """The kinds of scene a video is made of (probe.scenes), one band per kind: for each example scene the whole
+    frame and its busiest line art enlarged. What a kind IS (a night scene, the credits, an action scene) and what
+    it wants differently is read here; the measurements only sorted the scenes."""
+    src, dst = Path(src), Path(dst)
+    fps = media.probe(src)["fps"] or 25.0
+    width = CELL[0] * ZOOM * 3
+    cw = width // 4
+    got = [(k, [(n, fr[0]) for n in k.get("example_frames") or [] for fr in [frames_at(src, n / fps)] if fr]) for k in kinds]
+    overlay = overlay_mask([f for _, shown in got for _, f in shown])
+    rows: list[np.ndarray] = []
+    for k, shown in got:
+        if not shown:
+            continue
+        head = np.full((26, width, 3), 30, np.uint8)
+        text = (f"{k['id']}  {k['name']}: {k['scenes']} scenes, {k['share']:.0%} of the video; brightness {k['light']:g}, "
+                f"motion {k['motion']:g}, detail {k['detail']:g}"
+                + (f"; double images in {k['dips']:.1%} of frames" if k.get("dips", 0) >= 0.005 else ""))
+        cv2.putText(head, text, (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+        cells = []
+        for n, f in shown:
+            small = cv2.resize(f, (cw, round(f.shape[0] * cw / f.shape[1])), interpolation=cv2.INTER_AREA)
+            # an eighth of the frame's width, at least 120 px: on an HD frame 120 px shows one eyelash
+            part = max(cw // ZOOM, f.shape[1] // 8)
+            cell = (min(part, f.shape[1]), min(part * 3 // 4, f.shape[0]))
+            x, y = busiest(f, cell, ignore=overlay)
+            c = f[y:y + cell[1], x:x + cell[0]]
+            close = cv2.resize(c, (cw, cw * 3 // 4), interpolation=cv2.INTER_NEAREST)
+            cells += [_label(small, f"frame {n} ({n / fps:.0f} s)"), _label(close, f"its lines, x{cw / cell[0]:.1f}")]
+        rows += [head, _row(cells, width)]
+    if not rows:
+        return None
+    if title:
+        head = np.full((30, width, 3), 60, np.uint8)
+        cv2.putText(head, title.encode("ascii", "replace").decode()[:150], (6, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                    (255, 255, 255), 2, cv2.LINE_AA)
+        rows.insert(0, head)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    imgfile.imwrite(str(dst), np.vstack(rows), [cv2.IMWRITE_JPEG_QUALITY, 92])
+    return dst
+
+
 def recipe_sheet(columns: list[tuple[str, list[np.ndarray | None]]], dst: Path, *, cell: int = 420) -> Path | None:
     """Recipes side by side: one column per recipe (the first is the source), one row per preview. Every picture
     of a row shows the same part of the same moment; each is fitted to `cell` px wide without smoothing when it
