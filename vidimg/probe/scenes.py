@@ -77,12 +77,15 @@ def _cut(a: tuple, b: tuple) -> bool:
     return picture < CUT_PICTURE and tones < CUT_TONES
 
 
-def measure(frames: Iterator[np.ndarray], two_apart: bool = True) -> dict:
+def measure(frames: Iterator[np.ndarray], two_apart: bool = True, watch=None) -> dict:
     """One pass: per frame its brightness, edge energy, change from the frame before, and whether it starts a
-    new scene. two_apart: also cut where the frames before and after a frame differ (a cut blended over a frame)."""
+    new scene. two_apart: also cut where the frames before and after a frame differ (a cut blended over a frame).
+    watch: called with every frame (another measurement that needs the same pass, e.g. probe.damage)."""
     light, energy, step, cut = [], [], [], []
     before = tb = tbb = None
     for f in frames:
+        if watch is not None:
+            watch(f)
         t = ghosts._thumb(f)
         light.append(float(f.mean()))
         energy.append(ghosts._energy(f))
@@ -169,8 +172,8 @@ def _kinds(stats: list[dict], total: int) -> tuple[list[dict], dict]:
     return kinds, {k: ids[home[k]] for k in order}
 
 
-def find(frames: Iterator[np.ndarray], fps: float | None = None) -> Scenes:
-    m = measure(frames, two_apart=fps is None or fps >= ghosts.LOW_FPS)
+def find(frames: Iterator[np.ndarray], fps: float | None = None, watch=None) -> Scenes:
+    m = measure(frames, two_apart=fps is None or fps >= ghosts.LOW_FPS, watch=watch)
     if not m["n"]:
         return Scenes(error="no frame could be read")
     stats = [_scene_stats(m, a, z) for a, z in split(m["cut"])]
@@ -178,11 +181,11 @@ def find(frames: Iterator[np.ndarray], fps: float | None = None) -> Scenes:
     return Scenes(frames=m["n"], scenes=[[s["first"], s["last"], ids[s["key"]]] for s in stats], kinds=kinds)
 
 
-def scan(src: Path) -> Scenes:
+def scan(src: Path, watch=None) -> Scenes:
     src = Path(src)
     info = media.probe(src, exact=True)
     want = info["frames"]
-    got = find(ghosts.read_gray_exact(src), info.get("fps"))
+    got = find(ghosts.read_gray_exact(src), info.get("fps"), watch)
     if want and got.frames != want:
         return Scenes(frames=got.frames, error=f"read {got.frames} frames of {want}: the frame numbering is not certain")
     return got

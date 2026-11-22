@@ -145,6 +145,11 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               "rebuild_ghosts": true ONLY when the person asks to have the double images removed that deghost
               cannot replace (inside a scene, in fast movement): they are made again from their neighbours in
               that second file (alone it writes a copy at the original rate); the faithful file keeps them.
+              "rebuild_damaged": [frame numbers] ONLY when the person wants damaged frames made again: the
+              frames of the source (from the item's damaged.frames, or others you saw) that you judged on
+              damaged.sheet to be real damage (tape tearing, dropouts, broken blocks), never a flash or a frame
+              drawn that way. They are made again from their two neighbours in that second file; the faithful
+              file keeps them. Tell the person how many frames are created.
               "per_kind": {"k3": {"texture": 0.5, "steps": {"deblock": "strong", "dehalo": false}}} when a kind
               of scene (the item's scenes.kinds, shown on scenes.sheet) wants something else than the rest:
               its own texture strength, another preset or settings for a step of the recipe, or that step left
