@@ -350,13 +350,36 @@ class ReplaceFrames:
         return [f"FreezeFrame({int(i)}, {int(i)}, {int(j)})" for i, j in self.pairs]
 
 
+@dataclass
+class ByRanges:
+    """Picture filters whose settings differ from one stretch of the video to the next (a recipe's settings by
+    kind of scene). Every variant is computed on the WHOLE clip and the stretches are then taken from the variant
+    that is theirs, so a filter that looks at neighbouring frames sees the frames it always sees. Same frames,
+    same size, same rate; a variant without lines is the input itself. Runs alone."""
+
+    variants: list = field(default_factory=list)   # per variant: its script lines ([] = the input, untouched)
+    ranges: list = field(default_factory=list)     # [[first, last, variant index], ...] in order, covering every frame
+
+    def rate(self) -> Fraction:
+        return Fraction(1)
+
+    def lines(self) -> list[str]:
+        out = ["__in = last"]
+        for i, text in enumerate(self.variants):
+            out += ["last = __in", *text, f"__v{i} = last"] if text else [f"__v{i} = __in"]
+        for n, (a, z, v) in enumerate(self.ranges):
+            part = f"__v{int(v)}.Trim({int(a)}, end={int(z)})"
+            out.append(f"__out = {part}" if n == 0 else f"__out = __out ++ {part}")
+        return out + ["__out"]
+
+
 AvsStage = (Deinterlace | IVTC | Deblock | Degrain | ChromaDenoise | Repair | ChromaShift | MaskBottom | SRestore
-            | DropRepeats | Dehalo | DeinterlaceSpans | Lines | ReplaceFrames)
+            | DropRepeats | Dehalo | DeinterlaceSpans | Lines | ReplaceFrames | ByRanges)
 # processing order from the Doom9 consensus (04_doom9_practice.md 1.1). Deblock runs on the original
 # grid; for interlaced input, field handling comes first (Deblock_QED needs progressive frames).
 # Un-blending comes right after field handling: every later stage would smear the ghosts further.
 # Chroma shift is corrected on progressive frames, right after field handling.
-_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, DropRepeats: 2.3, DeinterlaceSpans: 2.05, ReplaceFrames: 2.25, Dehalo: 4.5, Lines: 3.5, ChromaDenoise: 3,
+_ORDER = {Deblock: 1, Deinterlace: 2, IVTC: 2, ChromaShift: 2.1, MaskBottom: 2.15, SRestore: 2.2, DropRepeats: 2.3, DeinterlaceSpans: 2.05, ReplaceFrames: 2.25, Dehalo: 4.5, Lines: 3.5, ByRanges: 3.5, ChromaDenoise: 3,
           Degrain: 4,
           Repair: 5}
 

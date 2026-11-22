@@ -24,6 +24,7 @@ from collections import deque
 
 import json
 import subprocess
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -98,9 +99,11 @@ def _matrix(name: str | None, height: int) -> str:
 
 
 def apply(base: Path, restored: Path, dst: Path, strength: float, encoder: str = "hevc10", *, workers: int = 6,
-          on_progress: Callable[[int, int], None] | None = None) -> AdapterResult:
+          on_progress: Callable[[int, int], None] | None = None, strengths: list | None = None) -> AdapterResult:
     """Write `dst`: `restored` with the texture of `base` (the model's input) returned in its luma. Chroma, audio,
-    metadata, colour tags and pixel aspect come from `restored`; same encoder settings as the model pass."""
+    metadata, colour tags and pixel aspect come from `restored`; same encoder settings as the model pass.
+    strengths: [[first frame, last frame, strength], ...] for stretches that get another strength than `strength`
+    (a recipe's texture by kind of scene); frames in none of them get `strength`."""
     base, restored, dst = Path(base), Path(restored), Path(dst)
     bi, ri = media.probe(base, exact=True), media.probe(restored, exact=True)
     so = _probe_stream(restored)
@@ -111,16 +114,19 @@ def apply(base: Path, restored: Path, dst: Path, strength: float, encoder: str =
                    bi["height"])
     out_m = _matrix(so.get("color_space"), h)
     ff = media.ffmpeg()
+    # the decoders' messages go to files of their own: a handle inherited from a host without a console made
+    # the launch itself fail ([WinError 6]), and what a decoder says is worth passing on
+    said = [tempfile.TemporaryFile(), tempfile.TemporaryFile()]
     # the source at output size, in the output's matrix, so its luma is comparable (bicubic: adds nothing)
     dec_b = subprocess.Popen([ff, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(base), "-map", "0:v:0",
                               "-fps_mode", "passthrough", "-vf",
                               f"scale={w}:{h}:flags=bicubic:in_color_matrix={in_m}:out_color_matrix={out_m}:"
                               f"in_range=tv:out_range=tv,format=yuv420p16le,extractplanes=y",
                               "-pix_fmt", "gray16le", "-f", "rawvideo", "-"],
-                             stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
+                             stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, stderr=said[0])
     dec_r = subprocess.Popen([ff, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(restored), "-map", "0:v:0",
                               "-fps_mode", "passthrough", "-pix_fmt", "yuv420p16le", "-f", "rawvideo", "-"],
-                             stdout=subprocess.PIPE, stdin=subprocess.DEVNULL)
+                             stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, stderr=said[1])
     exact = subprocess.run([media.ffprobe(), "-v", "error", "-select_streams", "v:0", "-show_entries",
                             "stream=r_frame_rate", "-of", "csv=p=0", str(restored)], capture_output=True,
                            text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL).stdout.strip() or f"{ri['fps']:g}"
@@ -135,20 +141,27 @@ def apply(base: Path, restored: Path, dst: Path, strength: float, encoder: str =
     if dst.suffix.lower() in (".mp4", ".mov", ".m4v"):
         enc += ["-movflags", "+write_colr+faststart"]
     ysz, csz = w * h * 2, (w // 2) * (h // 2) * 2
+    per_frame = np.full(max(n, 1) + 4, float(strength), np.float32)
+    for a, z, s in strengths or []:
+        per_frame[max(0, int(a)):int(z) + 1] = float(s)
 
     def frames():
+        i = 0
         while True:
             yb = dec_b.stdout.read(ysz)
             fr = dec_r.stdout.read(ysz + 2 * csz)
             if len(yb) < ysz or len(fr) < ysz + 2 * csz:
                 return
-            yield yb, fr
+            yield yb, fr, float(per_frame[min(i, len(per_frame) - 1)])
+            i += 1
 
     def work(item):
-        yb, fr = item
+        yb, fr, s = item
+        if s <= 0:
+            return fr                                       # this stretch gets no texture back: the model's frame
         ref = np.frombuffer(yb, "<u2").reshape(h, w).astype(np.float32)
         out = np.frombuffer(fr[:ysz], "<u2").reshape(h, w).astype(np.float32)
-        y = np.clip(return_texture(ref, out, strength, scale=257.0) + 0.5, 0, 65535).astype("<u2")
+        y = np.clip(return_texture(ref, out, s, scale=257.0) + 0.5, 0, 65535).astype("<u2")
         return y.tobytes() + fr[ysz:]
 
     count = [0]
@@ -183,12 +196,16 @@ def apply(base: Path, restored: Path, dst: Path, strength: float, encoder: str =
     stderr = p.stderr.read().decode("utf-8", "replace")
     p.wait()
     t.join()
-    for d in (dec_b, dec_r):
+    for d, f in zip((dec_b, dec_r), said):
         d.stdout.close()
         d.wait()
+        f.seek(0)
+        media.relay_errors(f.read().decode("utf-8", "replace"))
+        f.close()
     if err or p.returncode != 0 or not dst.exists():
         return AdapterResult(False, error=(err[0] if err else stderr.strip()[-300:] or f"ffmpeg exit {p.returncode}"))
     out = media.probe(dst, exact=True)
     if abs(out["frames"] - n) > max(2, n * 0.002):
         return AdapterResult(False, [dst], error=f"frame count {out['frames']} != {n}")
-    return AdapterResult(True, [dst], details={"strength": strength, "frames": count[0], "matrix": [in_m, out_m]})
+    return AdapterResult(True, [dst], details={"strength": strength, "frames": count[0], "matrix": [in_m, out_m],
+                                               "stretches": len(strengths or [])})

@@ -424,10 +424,14 @@ def _next_step(plan: dict, states: list) -> str | None:
                 "the size) and the texture. proposed_recipe is the analysis' starting point, not a path to "
                 "follow. Each video's `scenes` says what kinds of scene it is made of (by light, "
                 "motion and detail, with the share of the video each holds and how often double images occur in "
-                "it) and scenes.sheet shows frames of each kind: one recipe has to serve them all for now, so "
-                "compose it for the kinds that hold most of the video, check on the sheet that it will not hurt "
-                "the others (a dark or flat kind shows smoothing first), and tell the person which kinds it "
-                "suits less. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
+                "it) and scenes.sheet shows frames of each kind. Compose the recipe for the kinds "
+                "that hold most of the video, then look at the others on the sheet: where a kind wants "
+                "something else (a dark or flat kind shows smoothing first; a kind full of double images or "
+                "blocks may want a stronger filter), say so in the recipe's `per_kind`: {kind id: {texture, "
+                "steps: {block: preset | {preset, settings} | false}}}, or limit a step to some kinds with "
+                "its `kinds`. One model serves the whole video; only script filters and the texture strength "
+                "can differ by kind, and only for a single video (not a series). Leave per_kind out when the "
+                "kinds look alike: every difference is something more to check. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
                 "each; an item's `gaps` are defects it was measured to have that no block addresses. When the "
                 "close-ups show a defect with no block (measured or not), write the block from what you know "
                 "about restoring it (add_block), compare the recipe with and without it (try_recipes), and "
@@ -487,6 +491,7 @@ def _decide(out: Path, decisions: dict[str, dict], by: str) -> dict:
                 d["recipe"], advice = recipe_mod.validate(d["recipe"])
             except ValueError as e:
                 raise ValueError(f"{item_id}: recipe: {e}") from None
+            _check_kinds(item_id, it, d["recipe"])
             it.setdefault("reasons", []).extend(f"advice on the recipe: {a}" for a in advice)
         if "content" in d and "model" not in d and it["type"] != "photos":
             pick = (it.get("guide") or {}).get(f"suggested_if_{d['content']}")
@@ -506,6 +511,37 @@ def _decide(out: Path, decisions: dict[str, dict], by: str) -> dict:
             it["state"] = "pending"                     # a new decision is a new try
     save(plan)
     return plan
+
+
+def _check_kinds(item_id: str, it: dict, recipe: dict) -> None:
+    """A recipe may set things by kind of scene only for kinds this video has."""
+    named = recipe_mod.kinds_named(recipe)
+    if not named:
+        return
+    if it["type"] == "series":
+        raise ValueError(f"{item_id}: recipe: a series is decided as one and each episode has its own kinds of "
+                         "scene; settings by kind are for single videos")
+    known = [k["id"] for k in (it.get("scenes") or {}).get("kinds") or []]
+    if not known:
+        raise ValueError(f"{item_id}: recipe: this video has no scene map, so nothing can be set by kind of scene")
+    missing = [k for k in named if k not in known]
+    if missing:
+        raise ValueError(f"{item_id}: recipe: no kind {', '.join(missing)} in this video (its kinds: {', '.join(known)})")
+
+
+def _preview_kinds(it: dict, rec) -> list:
+    """The kind of scene each preview of a trial falls in (its middle frame), from the survey's map."""
+    from . import pipeline_video
+    from .probe import scenes
+    from .probe import video as pv
+    try:
+        found = statefile.read_json(Path(it["scenes"]["map"]))
+        prof = pv.VideoProfile(**rec.profile)
+        half = pipeline_video.PREVIEW_SECONDS / 2
+        return [scenes.kind_at(found["scenes"], min(found["frames"] - 1, round((s + half) * (prof.fps or 25.0))))
+                for s in pipeline_video._preview_starts(prof)]
+    except Exception:  # noqa: BLE001  (the trial then shows the recipe's own texture strength everywhere)
+        return []
 
 
 NUMBER_KEYS = {"scale", "texture"}
@@ -704,6 +740,7 @@ def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], Non
                 r["recipe"] = recipe_mod.validate(r["recipe"])[0]
             except ValueError as e:
                 raise ValueError(f"recipe {n}: {e}") from None
+            _check_kinds(f"recipe {n}", it, r["recipe"])
         typed.append((name, r))
     src = Path(it.get("analysed_episode") or it["source"])
     tdir = out / "trials" / item_id
@@ -724,13 +761,17 @@ def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], Non
         att = rec.attempts[-1] if rec.attempts else None
         work = run_dir / "work" / pipeline_video.work_key(run_dir, src)
         asked = (d.get("recipe") or {}).get("texture") if d.get("recipe") else d.get("texture")
-        strength = config.TEXTURE_STRENGTH if asked is None else float(asked)
+        everywhere = config.TEXTURE_STRENGTH if asked is None else float(asked)
+        # each preview is shown with what its kind of scene gets (the steps already ran on the whole video)
+        by_kind = recipe_mod.uses_kinds(d.get("recipe") or {})
+        kinds_of = _preview_kinds(it, rec) if by_kind else []
         shots: list = []
         sources: list = []
         for i in range(att.previews if att else 0):
             clip = work / "previews" / f"src_{i}.mkv"
             made = work / "previews" / "out" / f"{att.label.replace(' ', '_')}_{i}.mkv"
             shown = made
+            strength = recipe_mod.texture_for(d["recipe"], kinds_of[i], everywhere) if i < len(kinds_of) else everywhere
             if made.exists() and strength > 0:
                 tex = tdir / f"r{n}_{i}.mkv"
                 tdir.mkdir(parents=True, exist_ok=True)
@@ -751,6 +792,7 @@ def trial(out: Path, item_id: str, recipes: list[dict], log: Callable[[str], Non
         columns.append((f"{n} {name}" + ("" if passed else " (GUARD REJECTED)"), shots))
         results.append({"n": n, "name": name, "recipe": r, "model": att.label if att else None,
                         "guard_passed": passed, "failed_gates": failed, "vmaf": att.vmaf if att else [],
+                        **({"preview_kinds": kinds_of} if kinds_of else {}),
                         "notes": [x for x in rec.notes if "preview only" not in x]})
         log(f"{item_id} trial {n} {name}: {'passed the guard' if passed else 'REJECTED by the guard: ' + ', '.join(failed)}")
     sheet = closeups.recipe_sheet(columns, tdir / "recipes.jpg")

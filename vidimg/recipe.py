@@ -14,6 +14,18 @@ restoration. There are no paths in the pipeline; it runs the recipe.
      "rebuild_ghosts": true | false           ONLY when the person asks: in that second file (or in one at the original
                                               rate when interpolate is null) the ghost frames no neighbour can stand
                                               in for are made again from their neighbours (created frames too)
+     "per_kind": {"k3": {"texture": 0.5, "steps": {"deblock": "strong", "dehalo": false}}}
+                                              what a kind of scene gets differently (the kinds are the ones the survey
+                                              found in THIS video, probe/scenes.py): its own texture strength, another
+                                              preset or settings for a step of the recipe, or that step left out
+                                              (false). A step may also say {"block": ..., "kinds": ["k2", "k5"]}: it
+                                              then runs in those kinds only.
+
+One model serves the whole video: a change of model at every cut would be a change of look at every cut. What may
+differ by kind is how strongly a picture filter works and how much texture comes back. Only script filters on
+AviSynth judged by the video guard can differ by kind (they are computed on the whole clip and chosen per stretch,
+so a filter that looks at neighbouring frames sees the same frames as ever); steps that change the frame count,
+the size or the position are for the whole video.
 
 `faces` is a statement about the content, separate from the choice of model: routing by "anime or real" used to set
 both at once, and a cartoon kept at its own size was judged as if its faces were people's (owner sample,
@@ -24,11 +36,14 @@ else about order is advice, returned as warnings.
 
 from __future__ import annotations
 
+import re
+
 from . import config, library
 
 FACES = ("drawn", "real")
 FIELD_FLAGS = {"interlaced", "telecine", "blended", "chroma_shift"}
-KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpolate", "rebuild_ghosts"}
+KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpolate", "rebuild_ghosts", "per_kind"}
+KIND = re.compile(r"^k[1-9]\d?$")
 INTERPOLATE = (2, 3, 4)
 ANIME_MODELS = {"esrgan-v3", "cugan", "cugan-pro"}
 
@@ -42,11 +57,96 @@ def _step(s) -> dict:
         d["block"] = str(d.pop("block", None) or d.pop("name")).strip()
         if "strength" in d:                                  # the word the clean-up filters were first given
             d["preset"] = d.pop("strength")
-        extra = set(d) - {"block", "preset", "settings"}
+        extra = set(d) - {"block", "preset", "settings", "kinds"}
         if extra:
-            raise ValueError(f"step {d['block']}: unknown key(s) {sorted(extra)}; a step has block, preset, settings")
+            raise ValueError(f"step {d['block']}: unknown key(s) {sorted(extra)}; a step has block, preset, settings, kinds")
         return d
     raise ValueError(f"a step is a block name or {{block, preset, settings}}, got {s!r}")
+
+
+def by_kind_ok(b) -> bool:
+    """May this block's settings differ from one kind of scene to another?"""
+    return bool(b.scripted and b.engine == "avisynth" and b.check == "video_guard")
+
+
+def _kind_ids(value, where: str) -> list[str]:
+    if not isinstance(value, (list, tuple)) or not value or not all(isinstance(k, str) and KIND.match(k) for k in value):
+        raise ValueError(f"{where}: kinds is a list of kind ids as the survey names them (k1, k2, ...)")
+    return sorted(set(value), key=lambda k: int(k[1:]))
+
+
+def _per_kind(raw, steps: list[dict], blocks: dict) -> dict:
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("per_kind is an object: {kind id: {texture, steps}}")
+    by_name = {s["block"]: s for s in steps}
+    out: dict = {}
+    for kind in sorted(raw, key=str):
+        o = raw[kind]
+        if not isinstance(kind, str) or not KIND.match(kind):
+            raise ValueError(f"per_kind: {kind!r} is not a kind id (the survey names them k1, k2, ...)")
+        if not isinstance(o, dict) or set(o) - {"texture", "steps"}:
+            raise ValueError(f"per_kind {kind}: an object with texture and/or steps")
+        entry: dict = {}
+        t = o.get("texture")
+        if t is not None:
+            if isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 <= t <= 1:
+                raise ValueError(f"per_kind {kind}: texture must be between 0 and 1")
+            entry["texture"] = float(t)
+        changed: dict = {}
+        if o.get("steps") is not None and not isinstance(o["steps"], dict):
+            raise ValueError(f"per_kind {kind}: steps is an object {{block: preset, settings, or false}}")
+        for name, how in (o.get("steps") or {}).items():
+            base = by_name.get(name)
+            if base is None:
+                raise ValueError(f"per_kind {kind}: {name} is not one of the recipe's steps; list it in `steps` "
+                                 "(with `kinds` when only some kinds get it): the order of the steps is set there")
+            b = blocks[name]
+            if not by_kind_ok(b):
+                raise ValueError(f"per_kind {kind}: {name} cannot differ by kind (only script filters on AviSynth "
+                                 "judged by the video guard can; this step is for the whole video)")
+            if how is False:
+                changed[name] = False
+                continue
+            if base.get("kinds") and kind not in base["kinds"]:
+                raise ValueError(f"per_kind {kind}: {name} is limited to {', '.join(base['kinds'])} in `steps`")
+            if isinstance(how, str):
+                how = {"preset": how}
+            if not isinstance(how, dict) or set(how) - {"preset", "settings"} or not b.params:
+                raise ValueError(f"per_kind {kind}: {name} takes a preset name, {{preset, settings}}, or false"
+                                 + ("" if b.params else " (it has no settings: only false)"))
+            changed[name] = {**({"preset": how["preset"]} if how.get("preset") else {}),
+                             "settings": library.resolve(b, how.get("preset"), how.get("settings"))}
+        if changed:
+            entry["steps"] = changed
+        if entry:
+            out[kind] = entry
+    return out
+
+
+def uses_kinds(recipe: dict) -> bool:
+    return bool(recipe.get("per_kind")) or any(s.get("kinds") for s in recipe.get("steps") or [])
+
+
+def kinds_named(recipe: dict) -> list[str]:
+    named = set(recipe.get("per_kind") or {})
+    for s in recipe.get("steps") or []:
+        named |= set(s.get("kinds") or [])
+    return sorted(named, key=lambda k: int(k[1:]))
+
+
+def step_settings(recipe: dict, step: dict, kind: str | None) -> dict | None:
+    """The settings one step runs with in a kind of scene; None when it is left out there."""
+    how = (((recipe.get("per_kind") or {}).get(kind) or {}).get("steps") or {}).get(step["block"]) if kind else None
+    if how is False or (step.get("kinds") and kind not in step["kinds"]):
+        return None
+    return dict((how or step).get("settings") or {})
+
+
+def texture_for(recipe: dict, kind: str | None, default: float) -> float:
+    t = ((recipe.get("per_kind") or {}).get(kind) or {}).get("texture") if kind else None
+    return float(default if t is None else t)
 
 
 def validate(recipe: dict, blocks: dict | None = None) -> tuple[dict, list[str]]:
@@ -98,8 +198,14 @@ def validate(recipe: dict, blocks: dict | None = None) -> tuple[dict, list[str]]
             changed_size = changed_size or b.name
         if b.kind == "filter":
             filters.append(b.name)
+        only = None
+        if s.get("kinds") is not None:
+            only = _kind_ids(s["kinds"], f"step {b.name}")
+            if not by_kind_ok(b):
+                raise ValueError(f"{b.name} cannot be limited to kinds of scene (only script filters on AviSynth "
+                                 "judged by the video guard can; this step is for the whole video)")
         steps.append({"block": b.name, **({"preset": s["preset"]} if s.get("preset") else {}),
-                      **({"settings": values} if values else {})})
+                      **({"settings": values} if values else {}), **({"kinds": only} if only else {})})
     scale = recipe.get("scale")
     if scale is not None:
         if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not 1 <= scale <= 4:
@@ -136,9 +242,18 @@ def validate(recipe: dict, blocks: dict | None = None) -> tuple[dict, list[str]]
         warnings.append("rebuild_ghosts: ghost frames that no neighbour can stand in for (fast movement, cuts) are made "
                         "again from their neighbours in a second file; those frames are created, not original "
                         "picture, and the faithful file keeps the ghosts")
+    per = _per_kind(recipe.get("per_kind"), steps, blocks)
     out = {"faces": faces, "steps": steps, "models": models, "model_strict": bool(recipe.get("model_strict")),
            "scale": scale, "texture": None if texture is None else float(texture),
-           "interpolate": None if more is None else int(more), "rebuild_ghosts": bool(again)}
+           "interpolate": None if more is None else int(more), "rebuild_ghosts": bool(again), "per_kind": per}
+    if uses_kinds(out):
+        warnings.append(f"settings by kind of scene ({', '.join(kinds_named(out))}): the kinds are the ones the survey "
+                        "found in this video (scenes.kinds); in another video the same ids are other scenes")
+        first = next((s["block"] for s in steps if s.get("kinds") or any(
+            s["block"] in (o.get("steps") or {}) for o in per.values())), None)
+        if changed_count and first and [s["block"] for s in steps].index(changed_count) < [s["block"] for s in steps].index(first):
+            warnings.append(f"{changed_count} changes the frame count before {first}: the scenes are then found by "
+                            "their time, and a stretch may begin or end one frame off its cut")
     return out, warnings
 
 
@@ -166,12 +281,13 @@ def from_decision(d: dict, flags: list[str] | set[str]) -> dict:
         model = None                                   # an anime model picked before the content was called real
     return {"faces": faces, "steps": steps, "models": [model] if model in config.VIDEO_MODEL_CHOICES else [],
             "model_strict": bool(d.get("model_strict")), "scale": d.get("scale"), "texture": d.get("texture"),
-            "interpolate": None, "rebuild_ghosts": False}
+            "interpolate": None, "rebuild_ghosts": False, "per_kind": {}}
 
 
 def describe(recipe: dict) -> str:
     def one(s: dict) -> str:
-        return s["block"] + (f" ({s['preset']})" if s.get("preset") else "")
+        return (s["block"] + (f" ({s['preset']})" if s.get("preset") else "")
+                + (f" [only {', '.join(s['kinds'])}]" if s.get("kinds") else ""))
     parts = [f"faces {recipe['faces']}"]
     if recipe.get("steps"):
         parts.append("steps: " + ", then ".join(one(s) for s in recipe["steps"]))
@@ -185,4 +301,9 @@ def describe(recipe: dict) -> str:
     if recipe.get("rebuild_ghosts"):
         parts.append("ghosts in movement made again in the copy" if recipe.get("interpolate")
                      else "plus a copy with the ghosts in movement made again (created frames)")
+    for kind, o in (recipe.get("per_kind") or {}).items():
+        bits = [f"texture {o['texture']:g}"] if o.get("texture") is not None else []
+        bits += [f"{name} {'off' if how is False else how.get('preset') or 'own settings'}"
+                 for name, how in (o.get("steps") or {}).items()]
+        parts.append(f"in {kind}: " + ", ".join(bits))
     return "; ".join(parts)

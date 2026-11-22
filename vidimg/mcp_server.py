@@ -145,6 +145,11 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               "rebuild_ghosts": true ONLY when the person asks to have the double images removed that deghost
               cannot replace (inside a scene, in fast movement): they are made again from their neighbours in
               that second file (alone it writes a copy at the original rate); the faithful file keeps them.
+              "per_kind": {"k3": {"texture": 0.5, "steps": {"deblock": "strong", "dehalo": false}}} when a kind
+              of scene (the item's scenes.kinds, shown on scenes.sheet) wants something else than the rest:
+              its own texture strength, another preset or settings for a step of the recipe, or that step left
+              out. A step may carry "kinds": ["k2"] to run in those kinds only. Single videos only; one model
+              for the whole video; only script filters and texture can differ.
               Start from the item's proposed_recipe and its similar_cases / history, and change what the
               close-ups call for. Refused: a step that needs the source's frame numbers after one that changes
               them, and an anime model with faces "real". Advice about order comes back in the reasons,
