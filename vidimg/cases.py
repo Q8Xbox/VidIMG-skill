@@ -66,6 +66,8 @@ def record(source: Path | str, profile: dict, recipe: dict, result: dict, where:
                         "warned": sorted(k for k, g in gates.items() if g.get("status") == "warn"),
                         "vmaf": (gates.get("vmaf") or {}).get("value"),
                         "notes": [str(n)[:300] for n in (result.get("notes") or [])][:12]},
+            **({"timings": result["timings"], "work_done": result.get("work_done") or {}} if result.get("timings") else
+               {k: old[k] for k in ("timings", "work_done") if k in old}),
             **{k: old[k] for k in ("review", "verdict") if k in old}}
     path.write_text(json.dumps(case, indent=1, ensure_ascii=False, default=str), encoding="utf-8")
     return path
