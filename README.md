@@ -74,7 +74,11 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   - **Ghost frames of a low-rate copy** (`deghost`): a copy made at 10 or 12 fps with blending has single frames
     that are mixes of the picture before and the picture after. Each is replaced by the neighbour it holds more
     of, so every frame of the result is a frame of the source; mixes in runs are dissolves and stay. Its check
-    confirms the replaced frames are those neighbours, the others are untouched and the ghosts are gone.
+    confirms the replaced frames are those neighbours, the others are untouched and the ghosts are gone. A
+    one-frame mix of two scenes at a cut is replaced the same way, by the scene it holds more of. Ghosts inside
+    a scene in fast movement are mixes of two pictures the file holds nowhere else: no neighbour can stand in
+    for them, so the faithful file keeps them. On request (`rebuild_ghosts`) they are made again from their two
+    neighbours by RIFE, in the second file only, with the count in the record.
   - **Created frames only on request.** A recipe's `interpolate` (2, 3 or 4) writes a second file at that many
     times the frame rate, with frames created between the originals (RIFE), beside the faithful file, which is
     still the delivered one. The guard confirms the original frames are unchanged in the copy; nothing can vouch

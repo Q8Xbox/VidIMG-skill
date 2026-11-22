@@ -1,0 +1,16 @@
+{
+ "name": "rebuild_ghosts",
+ "kind": "finish",
+ "engine": "builtin",
+ "runner": "rebuild_ghosts",
+ "addresses": [
+  "ghost_frames"
+ ],
+ "what": "in a SECOND file, makes again the ghost frames that no neighbour can stand in for (fast movement, cuts): each is created by RIFE from the frame before and the frame after. The faithful file is delivered as always and keeps those ghosts",
+ "when": "ONLY when the person asks to have the remaining double images removed, after deghost has replaced the ones it can. Set the recipe's `rebuild_ghosts`, never as a step; alone it writes a copy at the original rate, with `interpolate` it goes into the frame-rate copy",
+ "softens": "the frames made again are created picture: a movement's middle is guessed, a one-frame mix of two scenes becomes one of the two scenes",
+ "tried_on": [
+  "owner cartoon at 10 fps: on a shaking-vehicle frame RIFE between the neighbours gave a clean single picture, where motion-vector interpolation (mvtools) left a pile of ghosts; frames whose edge energy dips alone under 0.80 of their neighbours' were ghosts in 10 of 10 looked at"
+ ],
+ "version": 1
+}

@@ -954,8 +954,9 @@ def _step_deghost(c: dict, settings: dict) -> bool:
     if out is not None:
         c["base"] = out
         rec.notes.append(f"ghost frames replaced: {d['count']} of {d['frames']} frames were mixes of the picture before "
-                         "and the picture after and now show the neighbour they held more of; every frame of the "
-                         "result is a frame of the source"
+                         "and the picture after and now show the neighbour they held more of"
+                         + (f" ({d['at_cuts']} of them one-frame mixes of two scenes: those cuts are clean cuts now)"
+                            if d.get("at_cuts") else "") + "; every frame of the result is a frame of the source"
                          + (f" ({d['in_runs']} mixes in runs were left: dissolves)" if d.get("in_runs") else ""))
     else:
         rec.notes.append(f"ghost frames not replaced: {d.get('skipped')}")
@@ -1011,13 +1012,14 @@ def run_deghost(base: Path, work: Path, log=print) -> tuple[Path | None, dict]:
     if not ok:
         return None, {"skipped": f"AviSynth+ not available ({why}); the ghost frames stay"}
     found = ghosts_probe.scan(base)
-    info: dict = {"frames": found.frames, "judged": found.judged, "count": len(found.ghosts), "in_runs": found.in_runs}
+    info: dict = {"frames": found.frames, "judged": found.judged, "count": len(found.ghosts), "in_runs": found.in_runs,
+                  "at_cuts": found.at_cuts, "pairs": [[i, j] for i, j, _ in found.ghosts]}
     if found.error:
         return None, info | {"skipped": found.error}
     if not found.ghosts:
         return None, info | {"skipped": "no ghost frame was found"}
-    log(f"   ghost frames: {len(found.ghosts)} of {found.frames} frames are mixes of their neighbours "
-        f"({found.in_runs} more in runs, left as dissolves)")
+    log(f"   ghost frames: {len(found.ghosts)} of {found.frames} frames are mixes ({found.at_cuts} of them between "
+        f"two scenes; {found.in_runs} more in runs, left as dissolves)")
     pairs = [[i, j] for i, j, _ in found.ghosts]
     gdir.mkdir(parents=True, exist_ok=True)
     (gdir / "ghosts.json").write_text(json.dumps(found.to_dict()), encoding="utf-8")
@@ -1437,64 +1439,122 @@ def lossless_copy(src: Path, dst: Path) -> str | None:
 
 
 def add_interpolation(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn: bool, log=print) -> VideoRecord:
-    """When the recipe asks for it (only on the person's request): a second file at a multiple of the frame rate,
-    with frames created between the originals (RIFE). The delivered file is not touched and stays the faithful
-    one. The copy is kept only if the guard finds the original frames unchanged in it; the created frames cannot
-    be vouched for by any check, and the record says how many they are."""
-    m = recipe.get("interpolate")
-    if not m or not rec.delivered:
+    """When the recipe asks for it (only on the person's request): a SECOND file holding created frames. The
+    delivered file is not touched and stays the faithful one. Two things can go into the copy:
+    * rebuild_ghosts: ghost frames no neighbour can stand in for are made again from their neighbours (rebuild.py);
+    * interpolate: the frame rate is multiplied, with frames created between the frames (RIFE).
+    The copy is kept only if its checks pass: every frame that was not made again is unchanged, and in the
+    frame-rate copy the frames it was made from are found unchanged. The created frames cannot be vouched for by
+    any check; the record says how many they are."""
+    m, again = recipe.get("interpolate"), recipe.get("rebuild_ghosts")
+    if not (m or again) or not rec.delivered:
         return rec
+    from . import rebuild as rebuild_mod
+    from .guard.video import verify_rebuilt
+
     src = Path(rec.delivered)
     info = media.probe(src, exact=True)
     fps = info["fps"] or 0
-    if not fps or fps * m > INTERPOLATE_MAX_FPS:
+    if m and (not fps or fps * m > INTERPOLATE_MAX_FPS):
         rec.notes.append(f"frame-rate copy not made: {fps:g} fps x{m} is above {INTERPOLATE_MAX_FPS - 1:g} fps")
-        return rec
-    dst = src.with_name(f"{src.stem}_{fps * m:.0f}fps{src.suffix}")
+        m = None
+        if not again:
+            return rec
     idir = work / "interpolate"
-    tmp = idir / "out" / dst.name                           # its own folder: an output folder may not hold the input
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    (idir / "in").mkdir(parents=True, exist_ok=True)
-    codec, pix, extra = (video2x.NVENC_CODEC[encoder] if encoder in video2x.NVENC_CODEC and media.nvenc()
-                         else video2x.ENCODER_TO_CODEC.get(encoder, video2x.ENCODER_TO_CODEC["hevc10"]))
-    log(f"   frame-rate copy: {fps:g} -> {fps * m:g} fps with RIFE ({m - 1} of every {m} frames created)")
+    shutil.rmtree(idir, ignore_errors=True)
+    for sub in ("in", "out"):                               # an output folder may not hold its input
+        (idir / sub).mkdir(parents=True, exist_ok=True)
     # Video2X is given a lossless copy without reordered frames: reading the delivered HEVC it lost the last two
     # frames (six of the copy's), which made the copy short and the guard unable to find the originals in it
     # (owner sample, 2026-11-21); from FFV1 a 120-frame clip came out as the full 358
     feed = idir / "in" / "feed.mkv"
     problem = lossless_copy(src, feed)
     if problem:
-        rec.notes.append(f"frame-rate copy not made: {problem}")
+        rec.notes.append(f"second file not made: {problem}")
         shutil.rmtree(idir, ignore_errors=True)
         return rec
-    r = video2x.run(feed, tmp, "rife", content="anime" if drawn else "real", fps_multiplier=m, model=RIFE_MODEL,
-                    codec=codec, pix_fmt=pix, extra=dict(extra))
-    feed.unlink(missing_ok=True)
-    if not r.ok:
-        rec.notes.append(f"frame-rate copy not made: {r.error}")
+    made_again = 0
+    if again:
+        # looked for in the source, where a ghost still dips (the model redraws it with firm lines); the frames a
+        # neighbour already stands in for are left out. Only when the numbering is the source's own
+        done = {int(i) for i, _ in (rec.prepass.get("deghost") or {}).get("pairs") or []}
+        origin = Path(rec.source)
+        same = origin.exists() and media.probe(origin, exact=True)["frames"] == info["frames"]
+        found = ghosts_probe.scan_soft(origin if same else feed, done)
+        rec.prepass["rebuild"] = {"found": len(found.found), "error": found.error, "looked_in": "source" if same else "result"}
+        if found.error or not found.found:
+            rec.notes.append("ghost frames in movement: " + (found.error or "none found; nothing made again"))
+        else:
+            log(f"   ghost frames in movement: {len(found.found)} of {found.frames} frames dip alone below their neighbours")
+            fixed = idir / "rebuilt" / "feed.mkv"
+            r = rebuild_mod.rebuild(feed, fixed, found.found, idir / "rebuild", drawn=drawn, log=log)
+            rep_ = verify_rebuilt(feed, fixed, rebuilt=found.found) if r.get("ok") else None
+            rec.prepass["rebuild"].update(r, guard_passed=bool(rep_ and rep_.passed), guard={} if rep_ is None else {
+                g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates})
+            if rep_ is not None and rep_.passed:
+                log("   ghost frames in movement: guard PASS")
+                feed.unlink(missing_ok=True)
+                feed, made_again = fixed, len(found.found)
+            else:
+                why = r.get("error") or ("its check failed: " + ", ".join(rep_.failed()) if rep_ is not None else "failed")
+                log(f"   ghost frames in movement: not made again ({why})")
+                rec.notes.append(f"ghost frames in movement not made again: {why}")
+    if not m and not made_again:
         shutil.rmtree(idir, ignore_errors=True)
         return rec
-    media.fix_av_offset(src, tmp)
-    media.fix_aspect(src, tmp)
+    name = f"{src.stem}_{fps * m:.0f}fps" if m else f"{src.stem}_ghosts_rebuilt"
+    dst = src.with_name(name + src.suffix)
+    tmp = idir / "out" / dst.name
+    if m:
+        codec, pix, extra = (video2x.NVENC_CODEC[encoder] if encoder in video2x.NVENC_CODEC and media.nvenc()
+                             else video2x.ENCODER_TO_CODEC.get(encoder, video2x.ENCODER_TO_CODEC["hevc10"]))
+        log(f"   frame-rate copy: {fps:g} -> {fps * m:g} fps with RIFE ({m - 1} of every {m} frames created)")
+        r = video2x.run(feed, tmp, "rife", content="anime" if drawn else "real", fps_multiplier=m, model=RIFE_MODEL,
+                        codec=codec, pix_fmt=pix, extra=dict(extra))
+        if not r.ok:
+            rec.notes.append(f"frame-rate copy not made: {r.error}")
+            shutil.rmtree(idir, ignore_errors=True)
+            return rec
+        media.fix_av_offset(feed, tmp)
+        media.fix_aspect(src, tmp)
+        # against what it was made from: after the ghosts were made again that is no longer the delivered file
+        rep_ = verify_video(feed, tmp, interpolated=True, drawn_faces=drawn)
+        made = media.probe(tmp, exact=True)["frames"]
+        rec.prepass["interpolate"] = {"multiplier": m, "frames": made, "guard_passed": rep_.passed,
+                                      "guard": {g.name: {"status": g.status, "value": g.value} for g in rep_.gates}}
+        log(f"   frame-rate copy: guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
+        if not rep_.passed:
+            rec.notes.append(f"frame-rate copy not kept: the frames it was made from did not come through unchanged "
+                             f"({', '.join(rep_.failed())})")
+            shutil.rmtree(idir, ignore_errors=True)
+            return rec
+    else:
+        cp = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(feed), "-map", "0",
+                             "-c:a", "copy", *media.encoder_args("hevc10-grain" if encoder == "hevc10" else encoder),
+                             "-map_metadata", "0", "-fps_mode", "passthrough", str(tmp)],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        if cp.returncode != 0 or not tmp.exists():
+            rec.notes.append("copy with the ghosts made again not written: " + cp.stderr.strip()[-200:])
+            shutil.rmtree(idir, ignore_errors=True)
+            return rec
+        media.fix_av_offset(src, tmp)
+        media.fix_aspect(src, tmp)
+        made = media.probe(tmp, exact=True)["frames"]
     side = carry_side_streams(src, tmp)
-    rep_ = verify_video(src, tmp, interpolated=True, drawn_faces=drawn)
-    made = media.probe(tmp, exact=True)["frames"]
-    rec.prepass["interpolate"] = {"multiplier": m, "frames": made, "guard_passed": rep_.passed,
-                                  "guard": {g.name: {"status": g.status, "value": g.value} for g in rep_.gates}}
-    log(f"   frame-rate copy: guard {'PASS' if rep_.passed else 'FAIL ' + ','.join(rep_.failed())}")
-    if not rep_.passed:
-        rec.notes.append(f"frame-rate copy not kept: the original frames did not come through unchanged "
-                         f"({', '.join(rep_.failed())})")
-        shutil.rmtree(idir, ignore_errors=True)
-        return rec
     dst.unlink(missing_ok=True)
     shutil.move(str(tmp), str(dst))
     shutil.rmtree(idir, ignore_errors=True)
     rec.interpolated = str(dst)
-    rec.notes.append(f"a second file at {fps * m:g} fps was written because it was asked for: {made - info['frames']} of its "
-                     f"{made} frames were created between the originals by RIFE and are not original picture (they "
-                     "can morph fast movement and repeat a ghosted frame); the original frames in it are unchanged. "
-                     "The faithful file at the original rate is the delivered one" + (f"; {side}" if side else ""))
+    between = made - info["frames"] if m else 0
+    parts = []
+    if between:
+        parts.append(f"{between} were created between the frames by RIFE")
+    if made_again:
+        parts.append(f"{made_again} ghost frames that no neighbour could stand in for were made again from their neighbours")
+    rec.notes.append(f"a second file ({dst.name}) was written because it was asked for: of its {made} frames, "
+                     + " and ".join(parts) + ". Those are not original picture (they can morph fast movement); every "
+                     "other frame in it is unchanged. The faithful file at the original rate is the delivered one"
+                     + (", and keeps those ghosts" if made_again else "") + (f"; {side}" if side else ""))
     try:
         (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
     except OSError:

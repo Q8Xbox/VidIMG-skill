@@ -747,6 +747,70 @@ def verify_deghost(src: Path, dst: Path, *, pairs: list, frames: int = 16) -> Gu
     return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
 
 
+# ----------------------------------------------------------------------------- ghost frames made again (a copy)
+REBUILT_LEFT = 0.25             # share of the sampled frames made again that may be no better than the ghost
+
+
+def verify_rebuilt(src: Path, dst: Path, *, rebuilt: list, frames: int = 24) -> GuardReport:
+    """A copy whose ghost frames were made again from their neighbours (rebuild.py), against the file it was made
+    from: same frames, duration, audio, shape; every sampled frame that was NOT made again is the input's; and the
+    frames that were made again no longer dip below their neighbours. The made frames themselves are created
+    picture: nothing here vouches for them, the record says how many they are."""
+    from fractions import Fraction
+
+    from ..probe import ghosts
+
+    src, dst = Path(src), Path(dst)
+    a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
+    gates = _rate_gates(a, b, Fraction(1), Fraction(1))
+    made = {int(i) for i in rebuilt}
+    total = min(a["frames"], b["frames"])
+    kept = [i for i in (int(total * (k + 0.5) / (frames * 2)) for k in range(frames * 2)) if i not in made][:frames]
+    worst = None
+    with tempfile.TemporaryDirectory(prefix="vidimg_rebuilt_") as tmp:
+        fa = _frames_by_index(src, kept, Path(tmp), "s", pre_vf="extractplanes=y")
+        fb = _frames_by_index(dst, kept, Path(tmp), "d", pre_vf="extractplanes=y")
+        for i in kept:
+            x, y = (_luma8(f[i]) if i in f else None for f in (fa, fb))
+            if x is None or y is None or x.shape != y.shape:
+                continue
+            p = float(10 * np.log10(255 ** 2 / max(float(np.mean((x - y) ** 2)), 1e-6)))
+            worst = p if worst is None else min(worst, p)
+    gates.append(Gate("untouched", "pass" if worst is not None and worst >= GHOST_SAME_PSNR else "fail",
+                      None if worst is None else round(worst, 1), GHOST_SAME_PSNR,
+                      "frames that were not made again, against the input (lowest of the sampled frames)"))
+    # the frames made again: against both neighbours, their edge energy must have risen (a ghost carries about
+    # half of a single picture's; measured on the files themselves, whatever was done to them since the ghosts
+    # were found)
+    order = sorted(made)
+    some = order[::max(1, len(order) // 12)][:12]
+    want = sorted({k for i in some for k in (i - 1, i, i + 1) if 0 <= k < total})
+    better = judged = 0
+    with tempfile.TemporaryDirectory(prefix="vidimg_rebuilt2_") as tmp:
+        fa = _frames_by_index(src, want, Path(tmp), "s", pre_vf="extractplanes=y")
+        fb = _frames_by_index(dst, want, Path(tmp), "d", pre_vf="extractplanes=y")
+
+        def dip(files: dict, i: int) -> float | None:
+            e = [ghosts._energy(x) if x is not None else None for x in (_luma8(files[k]) if k in files else None
+                                                                       for k in (i - 1, i, i + 1))]
+            return None if None in e or e[0] + e[2] <= 0 else e[1] / ((e[0] + e[2]) / 2)
+
+        for i in some:
+            x, y = dip(fa, i), dip(fb, i)
+            if x is None or y is None:
+                continue
+            judged += 1
+            better += y > x
+    share = better / judged if judged else 0.0
+    gates.append(Gate("ghosts", "pass" if judged and share >= 1 - REBUILT_LEFT else "fail", round(share, 3),
+                      1 - REBUILT_LEFT, f"{better} of {judged} sampled frames made again carry more edge energy "
+                                        "against their neighbours than the ghosts they replace"))
+    failed = [g.name for g in gates if g.status == "fail"]
+    sugg = {"untouched": "frames that were not to be made again changed: the copy is not kept",
+            "ghosts": "the frames made again still look like ghosts: the copy is not kept"}
+    return GuardReport(not failed, gates, [sugg[n] for n in failed if n in sugg], False)
+
+
 # ----------------------------------------------------------------------------- stabilised: moved, not altered
 MOVED_PSNR = 40.0               # dB after lining the frames up. Measured on an owner cut with artificial jitter:
                                 # a stabilised frame against its input 43.3 at worst (median 52.3); the same frames

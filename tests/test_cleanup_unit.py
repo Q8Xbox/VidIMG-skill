@@ -309,3 +309,62 @@ def test_the_ghost_check_wants_the_neighbours_in_place_and_the_ghosts_gone(tmp_p
     other[3] = clean[25]                                                              # a frame that was no ghost changed
     bad = verify_deghost(src, write(tmp_path / "other.mkv", other), pairs=pairs, frames=40)
     assert "untouched" in bad.failed()
+
+
+@needs_ffmpeg
+def test_ghosts_are_made_again_in_place_and_every_other_frame_passes_through(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    from vidimg import media, rebuild
+    from vidimg.guard.video import verify_rebuilt
+    from vidimg.probe import ghosts
+
+    rng = np.random.default_rng(6)
+    base = cv2.GaussianBlur(cv2.resize((rng.random((9, 12)) * 255).astype(np.uint8), (320, 240), interpolation=cv2.INTER_CUBIC), (0, 0), 2)
+    clean = [np.roll(base, 9 * k, axis=1) for k in range(30)]
+    two = lambda x, y: ((x.astype(np.float32) + y.astype(np.float32)) / 2).astype(np.uint8)  # noqa: E731
+    ghosted = list(clean)
+    for i in (8, 17, 23):
+        ghosted[i] = two(np.roll(base, 9 * i - 5, axis=1), np.roll(base, 9 * i + 5, axis=1))
+
+    def write(path, seq):
+        subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "gray",
+                        "-s", "320x240", "-r", "10", "-i", "-", "-c:v", "ffv1", "-pix_fmt", "yuv420p10le", str(path)],
+                       input=b"".join(f.tobytes() for f in seq), check=True, capture_output=True)
+        return path
+
+    def read(path):
+        raw = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(path), "-pix_fmt", "gray",
+                              "-f", "rawvideo", "-"], capture_output=True, stdin=subprocess.DEVNULL).stdout
+        return [np.frombuffer(raw[k * 76800:(k + 1) * 76800], np.uint8).reshape(240, 320) for k in range(len(raw) // 76800)]
+
+    feed = write(tmp_path / "feed.mkv", ghosted)
+    found = ghosts.scan_soft(feed)
+    assert found.error is None and found.found == [8, 17, 23]
+
+    def rife(src, dst, processor, **kw):                 # stands in for RIFE: the frame between two frames is their mean
+        fr = read(src)
+        out = []
+        for a, b in zip(fr, fr[1:]):
+            out += [a, two(a, b)]
+        write(dst, out + [fr[-1]])
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr(rebuild.video2x, "run", rife)
+    out = tmp_path / "rebuilt" / "feed.mkv"
+    info = rebuild.rebuild(feed, out, found.found, tmp_path / "work", log=lambda m: None)
+    assert info["ok"] and info["replaced"] == 3 and info["frames"] == 30
+    got = read(out)
+    assert len(got) == 30
+    for i in range(30):
+        want = two(ghosted[i - 1], ghosted[i + 1]) if i in (8, 17, 23) else ghosted[i]
+        # within the rounding of two grey <-> video-range conversions; another frame is 20 levels and more away
+        assert float(np.abs(got[i].astype(int) - want).mean()) < 2.0, i
+    rep = verify_rebuilt(feed, out, rebuilt=found.found, frames=12)
+    assert rep.failed() == [] or rep.failed() == ["ghosts"]          # a plain mean is still a mix: RIFE's job, not this test's
+    assert "untouched" not in rep.failed()
+    # a copy in which another frame changed is refused
+    spoiled = list(got)
+    spoiled[3] = clean[20]
+    assert "untouched" in verify_rebuilt(feed, write(tmp_path / "spoiled.mkv", spoiled), rebuilt=found.found, frames=30).failed()
+    assert media.probe(out, exact=True)["frames"] == 30

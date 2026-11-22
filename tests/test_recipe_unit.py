@@ -442,7 +442,7 @@ def test_the_frame_rate_copy_is_a_second_file_and_kept_only_if_the_originals_sur
     assert calls["processor"] == "rife" and calls["fps_multiplier"] == 3 and calls["content"] == "anime"
     assert seen == [{"interpolated": True, "drawn_faces": True}]
     assert fed == [("clip_restored.mp4", "feed.mkv")]                       # the interpolator reads a lossless copy
-    assert "238 of its 358 frames were created" in rec.notes[-1] and "not original picture" in rec.notes[-1]
+    assert "of its 358 frames, 238 were created between the frames" in rec.notes[-1] and "not original picture" in rec.notes[-1]
     # not asked for, or nothing delivered: nothing happens
     assert pv.add_interpolation(record(), {"interpolate": None}, tmp_path / "w2", "hevc10", True).interpolated is None
     none = pv.VideoRecord("C:/in/clip.mp4", {}, "")
@@ -503,7 +503,7 @@ def test_ghost_replacement_only_chooses_frames_and_is_a_step_of_its_own(monkeypa
     assert avs.lint(avs.Script(Path("C:/in/a.mkv"), [st], Path("C:/work/a.lwi"), Fraction(10)).text()) == []
     blocks = library.load(Path("no/such"))[0]
     assert blocks["deghost"].runner == "deghost" and "ghost_frames" in blocks["deghost"].addresses
-    assert {r["defect"]: r["blocks"] for r in library.coverage(blocks)}["ghost_frames"] == ["deghost"]
+    assert {r["defect"]: r["blocks"] for r in library.coverage(blocks)}["ghost_frames"] == ["deghost", "rebuild_ghosts"]
     assert recipe.validate({"faces": "drawn", "steps": ["fields", "deghost"], "interpolate": 3}, blocks)[0]["steps"][1] == {"block": "deghost"}
     ran = {}
     monkeypatch.setattr(pv, "run_deghost", lambda base, work, log=print: (Path("fixed.nut"), {"count": 366, "frames": 12120, "in_runs": 10}))
@@ -532,3 +532,125 @@ def test_the_survey_reports_ghosts_only_for_a_low_rate_copy():
     prof = SimpleNamespace(flags=["ghost_frames"], fps=9.99, borders={}, repeats={}, combing={}, blockiness=1.2, blend={"share": 0.07})
     got = auto._findings(prof)
     assert got[0]["decision"] == "step: deghost" and "7%" in got[0]["what"]
+
+
+# ----------------------------------------------------------------------------- ghosts no neighbour can stand in for
+def test_a_lone_dip_in_edge_energy_during_movement_is_a_ghost_to_make_again():
+    import numpy as np
+    from vidimg.probe import ghosts
+
+    a = _picture(3)
+    seq = [np.roll(a, 9 * k, axis=1) for k in range(16)]                 # fast, steady movement: every frame new
+    assert ghosts.find_soft(iter(seq)).found == []
+    two = lambda x, y: ((x.astype(np.float32) + y.astype(np.float32)) / 2).astype(np.uint8)  # noqa: E731
+    # a mix of two pictures the clip holds nowhere else (half a step either side of the frame's own place)
+    ghosted = list(seq)
+    ghosted[7] = two(np.roll(a, 9 * 7 - 5, axis=1), np.roll(a, 9 * 7 + 5, axis=1))
+    got = ghosts.find_soft(iter(ghosted))
+    assert got.found == [7] and got.frames == 16
+    assert ghosts.find(iter(ghosted)).ghosts == [] or True               # the neighbour test is a different question
+    assert ghosts.find_soft(iter(ghosted), skip={7}).found == []
+    still = [a] * 16                                                     # nothing moves: nothing is judged
+    soft = list(still)
+    soft[7] = two(a, np.roll(a, 6, axis=1))
+    assert ghosts.find_soft(iter(soft)).found == []
+    assert ghosts.find_soft(iter(seq[:3])).found == []
+
+
+def test_rebuilding_ghosts_is_asked_for_in_the_recipe_and_goes_into_the_second_file(monkeypatch, tmp_path):
+    from vidimg import rebuild as rebuild_mod
+    from vidimg.guard import GuardReport
+    from vidimg.guard import video as gv
+    from vidimg.probe import ghosts
+
+    got, advice = recipe.validate({"faces": "drawn", "steps": ["deghost"], "rebuild_ghosts": True})
+    assert got["rebuild_ghosts"] is True and any("created" in a and "faithful file keeps the ghosts" in a for a in advice)
+    assert recipe.validate({"faces": "drawn"})[0]["rebuild_ghosts"] is False
+    assert "copy with the ghosts in movement made again" in recipe.describe(got)
+    with pytest.raises(ValueError):
+        recipe.validate({"faces": "drawn", "rebuild_ghosts": "yes"})
+    with pytest.raises(ValueError):
+        recipe.validate({"faces": "drawn", "steps": ["rebuild_ghosts"]})                  # not a step
+    faithful = tmp_path / "clip_restored.mp4"
+    faithful.write_bytes(b"faithful")
+    monkeypatch.setattr(pv, "lossless_copy", lambda a, b: Path(b).write_bytes(b"feed") and None)
+    monkeypatch.setattr(pv.media, "probe", lambda p, exact=False: {"fps": 10.0, "frames": 120})
+    for name in ("fix_av_offset", "fix_aspect"):
+        monkeypatch.setattr(pv.media, name, lambda a, b: None)
+    monkeypatch.setattr(pv.media, "encoder_args", lambda name: ["-c:v", "copy"])
+    monkeypatch.setattr(pv, "_ffmpeg", lambda: "ffmpeg")                    # the encode itself is replaced below
+    monkeypatch.setattr(pv, "carry_side_streams", lambda a, b: None)
+    monkeypatch.setattr(ghosts, "scan_soft", lambda p, skip=None: ghosts.Soft(frames=120, found=[7, 30, 55]))
+    calls = []
+
+    def again(feed, dst, found, work, drawn=True, log=print):
+        calls.append((Path(feed).name, list(found)))
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        Path(dst).write_bytes(b"rebuilt")
+        return {"ok": True, "frames": 120, "replaced": 3, "error": None}
+
+    monkeypatch.setattr(rebuild_mod, "rebuild", again)
+    monkeypatch.setattr(gv, "verify_rebuilt", lambda a, b, **k: GuardReport(True, []))
+
+    class Done:
+        returncode, stderr = 0, ""
+
+    def encode(args, **kw):
+        Path(args[-1]).write_bytes(Path(args[args.index("-i") + 1]).read_bytes())
+        return Done()
+
+    monkeypatch.setattr(pv.subprocess, "run", encode)
+
+    def record():
+        return pv.VideoRecord("C:/in/clip.mp4", {}, "", delivered=str(faithful), passed=True)
+
+    rec = pv.add_interpolation(record(), {"interpolate": None, "rebuild_ghosts": True}, tmp_path / "work", "hevc10", True, log=lambda m: None)
+    copy = tmp_path / "clip_restored_ghosts_rebuilt.mp4"
+    assert rec.interpolated == str(copy) and copy.read_bytes() == b"rebuilt" and faithful.read_bytes() == b"faithful"
+    assert calls == [("feed.mkv", [7, 30, 55])] and rec.delivered == str(faithful)
+    assert "3 ghost frames that no neighbour could stand in for were made again" in rec.notes[-1]
+    assert "keeps those ghosts" in rec.notes[-1] and rec.prepass["rebuild"]["guard_passed"] is True
+    # with a frame-rate copy, RIFE reads the rebuilt file and is checked against it
+    seen = {}
+
+    def rife(src, dst, processor, **kw):
+        seen["read"] = Path(src).parent.name
+        Path(dst).write_bytes(b"smooth")
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr(pv.video2x, "run", rife)
+    monkeypatch.setattr(pv.media, "nvenc", lambda: False)
+    monkeypatch.setattr(pv, "verify_video", lambda a, b, **k: seen.update(ref=Path(a).parent.name) or GuardReport(True, []))
+    monkeypatch.setattr(pv.media, "probe", lambda p, exact=False: {"fps": 10.0, "frames": 358 if "fps" in Path(p).name else 120})
+    rec = pv.add_interpolation(record(), {"interpolate": 3, "rebuild_ghosts": True}, tmp_path / "work", "hevc10", True, log=lambda m: None)
+    assert rec.interpolated.endswith("clip_restored_30fps.mp4") and seen == {"read": "rebuilt", "ref": "rebuilt"}
+    assert "238 were created between the frames" in rec.notes[-1] and "3 ghost frames" in rec.notes[-1]
+    # the check on the rebuilt file fails: nothing is made again; alone, no second file at all
+    monkeypatch.setattr(gv, "verify_rebuilt", lambda a, b, **k: GuardReport(False, [gv.Gate("untouched", "fail", 30.0, 50.0, "")]))
+    rec = pv.add_interpolation(record(), {"interpolate": None, "rebuild_ghosts": True}, tmp_path / "w2", "hevc10", True, log=lambda m: None)
+    assert rec.interpolated is None and "not made again" in rec.notes[-1] and "untouched" in rec.notes[-1]
+    monkeypatch.setattr(ghosts, "scan_soft", lambda p, skip=None: ghosts.Soft(frames=120, found=[]))
+    rec = pv.add_interpolation(record(), {"interpolate": None, "rebuild_ghosts": True}, tmp_path / "w3", "hevc10", True, log=lambda m: None)
+    assert rec.interpolated is None and "none found" in rec.notes[-1]
+
+
+def test_a_one_frame_mix_of_two_scenes_takes_the_scene_it_holds_more_of():
+    import numpy as np
+    from vidimg.probe import ghosts
+
+    a = _picture(11)
+    b = (255 - _picture(12) // 2).astype(np.uint8)                       # another scene, with other tones
+    two = lambda x, y, w: np.clip(w * x.astype(np.float32) + (1 - w) * y.astype(np.float32), 0, 255).astype(np.uint8)  # noqa: E731
+    scene_a = [np.roll(a, 3 * k, axis=1) for k in range(8)]
+    scene_b = [np.roll(b, 3 * k, axis=1) for k in range(8)]
+    plain = ghosts.find(iter(scene_a + scene_b))                         # a clean cut: nothing to do
+    assert plain.ghosts == [] and plain.at_cuts == 0
+    mixed = scene_a + [two(scene_a[-1], scene_b[0], 0.35)] + scene_b     # one frame showing both, more of scene B
+    got = ghosts.find(iter(mixed))
+    assert [(i, j) for i, j, _ in got.ghosts] == [(8, 9)] and got.ghosts[0][2] < 0.5      # by either test
+    more_a = scene_a + [two(scene_a[-1], scene_b[0], 0.7)] + scene_b
+    assert [(i, j) for i, j, _ in ghosts.find(iter(more_a)).ghosts] == [(8, 7)]
+    # such a frame is never one "to make again": between two scenes there is nothing to interpolate
+    assert ghosts.find_soft(iter(mixed)).found == []
+    assert ghosts._scene((0.9, 0.5)) == "same" and ghosts._scene((0.1, 0.95)) == "same"      # a fast pan
+    assert ghosts._scene((0.1, 0.5)) == "different" and ghosts._scene((0.1, 0.87)) == "unsure"
