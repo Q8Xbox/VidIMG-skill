@@ -15,8 +15,10 @@ each pair is what is wanted, at index 4k+1), and the video is written again with
 places. Every other frame passes through as stored.
 
 The same is done for damaged frames (probe/damage.py), with two additions:
-  * runs: up to RUN_MAX frames in a row are made from the sound frame before the run and the sound frame after
-    it. RIFE is asked for as many frames between that pair as the run is long (a run of two: the pair tripled,
+  * runs: up to RUN_MAX frames in a row (up to RUN_STILL where the scene holds still: the two sound frames show
+    nearly the same picture) are made from the sound frame before the run and the sound frame after it. On an
+    owner cartoon a run of five torn frames in a talking scene came out clean and crisp this way, where a video
+    inpainting model given the same frames (ProPainter, tried 2026-11-22) left a soft picture with a mesh pattern. RIFE is asked for as many frames between that pair as the run is long (a run of two: the pair tripled,
     the frames at one third and two thirds).
   * regions: a torn frame is usually sound over most of its area. Where the stored frame agrees with the frame
     made for it, the stored frame is kept; only the part that differs is taken from the made frame, with a soft
@@ -35,10 +37,13 @@ import numpy as np
 
 from . import media
 from .adapters import video2x
+from .probe import damage
 
 PIX = "yuv420p10le"
 RIFE_MODEL = "rife-v4.26"
-RUN_MAX = 3                     # frames in a row made from one pair of sound frames (probe.damage finds as many)
+RUN_MAX = damage.RUN_MAX        # frames in a row made from one pair of sound frames, whatever the scene does
+RUN_STILL = damage.RUN_STILL    # ... and where the two sound frames show nearly the same picture (see still_enough)
+STILL_CELLS = damage.STILL_CELLS
 REGION_GRID = (9, 12)           # rows, columns of cells in which a stored frame is compared with the made one
 REGION_OUT = 10.0               # 8-bit levels: a cell differing more than this is taken from the made frame
 REGION_WHOLE = 0.6              # share of cells from which the whole frame is taken (nothing sound is left to keep)
@@ -96,6 +101,15 @@ def runs_of(frames: list[int]) -> list[list[int]]:
         else:
             out.append([i, i])
     return out
+
+
+def still_enough(before: np.ndarray, after: np.ndarray) -> tuple[bool, float]:
+    """May a long run between these two frames (luma, any size) be made from them? Only when they show nearly the
+    same picture: what RIFE puts between two frames far apart in a moving scene is a guess at the movement."""
+    size = (REGION_GRID[1], REGION_GRID[0])
+    a, b = (cv2.resize(x.astype(np.float32), (360, 270), interpolation=cv2.INTER_AREA) for x in (before, after))
+    share = float((cv2.resize(np.abs(a - b), size, interpolation=cv2.INTER_AREA) > REGION_OUT).mean())
+    return share <= STILL_CELLS, round(share, 3)
 
 
 def write_pairs(feed: Path, dst: Path, runs: list[list[int]]) -> int:
@@ -204,16 +218,16 @@ def compose(feed: Path, mids: dict | Path, dst: Path, runs: list, *, regions: bo
 def rebuild(feed: Path, dst: Path, ghosts: list[int], work: Path, *, drawn: bool = True,
             log: Callable[[str], None] = print, what: str = "ghost frames in movement", regions: bool = False) -> dict:
     """Write `dst`: `feed` (lossless) with the listed frames made again from their neighbours. Frames listed side
-    by side are a run, made from the frames either side of it (up to RUN_MAX; a longer run is an error: the
-    caller leaves those out). work: a folder of its own (each stage writes into a sub-folder that does not hold
+    by side are a run, made from the frames either side of it (up to RUN_STILL; a longer run is an error, and
+    whether a run longer than RUN_MAX sits in a still enough scene is for the caller to check: still_enough). work: a folder of its own (each stage writes into a sub-folder that does not hold
     its input). what: how the log names the frames. regions: keep the stored frame where it agrees with the
     made one (see the module text)."""
     feed, dst, work = Path(feed), Path(dst), Path(work)
     runs = runs_of(ghosts)
     count = sum(z - a + 1 for a, z in runs)
     info: dict = {"asked": count, "runs": sum(1 for a, z in runs if z > a)}
-    if any(z - a + 1 > RUN_MAX for a, z in runs):
-        return info | {"ok": False, "error": f"a run of more than {RUN_MAX} frames cannot be made from its neighbours"}
+    if any(z - a + 1 > RUN_STILL for a, z in runs):
+        return info | {"ok": False, "error": f"a run of more than {RUN_STILL} frames cannot be made from its neighbours"}
     for sub in ("pairs", "mids"):
         (work / sub).mkdir(parents=True, exist_ok=True)
     dst.parent.mkdir(parents=True, exist_ok=True)

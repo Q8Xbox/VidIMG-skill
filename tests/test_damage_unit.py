@@ -63,8 +63,14 @@ def test_a_frame_that_differs_from_two_agreeing_neighbours_is_a_candidate():
     assert strobe.runs == []                                            # a sound frame inside it: not a run of damage
     three = [a] * 6 + [_torn(a, 5), _torn(a, 6), _torn(a, 7)] + [a] * 6
     assert [(r["first"], r["last"]) for r in damage.find(iter(three)).runs] == [(6, 8)]
-    four = [a] * 6 + [_torn(a, k) for k in (5, 6, 7, 8)] + [a] * 6     # longer than is looked for
-    assert damage.find(iter(four)).runs == []
+    four = [a] * 6 + [_torn(a, k) for k in (5, 6, 7, 8)] + [a] * 6     # the scene holds still: a longer run is found
+    assert [(r["first"], r["last"]) for r in damage.find(iter(four)).runs] == [(6, 9)]
+    seven = [a] * 6 + [_torn(a, k) for k in range(5, 12)] + [a] * 6    # longer than is looked for anywhere
+    assert damage.find(iter(seven)).runs == []
+    drift = [np.roll(a, 2 * k, axis=1) for k in range(16)]              # a slow pan: after four frames it has moved on
+    for k in (6, 7, 8, 9):
+        drift[k] = _torn(drift[k], k)
+    assert damage.find(iter(drift)).runs == []
     moving = [np.roll(a, 6 * k, axis=1) for k in range(20)]              # the frames either side do not agree
     moving[9], moving[10] = _torn(moving[9]), _torn(moving[10])
     assert damage.find(iter(moving)).runs == []
@@ -112,7 +118,7 @@ def test_the_survey_lists_the_lone_candidates_largest_first_and_keeps_flashes_ap
     assert out["runs"] == [[30, 31]] and seen["runs"] == got.runs
     assert out["sheet"].endswith("v1_damaged.jpg") and "1 candidate damaged frames" in seen["title"]
     assert json.loads(Path(out["list"]).read_text(encoding="utf-8"))["lone"] == [10, 20]
-    assert "1 candidate damaged frames, 1 runs of two or three, 1 one-tone flashes, 0 in a flicker" in said[-1]
+    assert "1 candidate damaged frames, 1 runs of two to six, 1 one-tone flashes, 0 in a flicker" in said[-1]
     only_runs = damage.Damage(frames=40, runs=got.runs)
     assert auto._damaged("v3", Path("C:/in/clip.mkv"), tmp_path, only_runs, said.append)["runs"] == [[30, 31]]
     assert auto._damaged("v2", Path("C:/in/clip.mkv"), tmp_path, damage.Damage(frames=9), said.append) is None
@@ -209,11 +215,23 @@ def test_named_frames_are_made_again_in_a_second_file_and_the_faithful_file_keep
     rec = pv.add_interpolation(record(), {**rcp, "rebuild_damaged": [50, 100]}, tmp_path / "w2", "hevc10", True, log=lambda m: None)
     assert calls == [[40, 80]] and rec.prepass["rebuild_damaged"]["by_time"] is True
     frames["clip.mp4"] = 120
-    # four named frames in a row: nothing sound is close enough, the run is left and the lone frame is made
+    # four named frames in a row: made where the scene holds still, left where it moves
+    four = {**rcp, "rebuild_damaged": [20, 21, 22, 23, 60]}
     calls.clear()
-    rec = pv.add_interpolation(record(), {**rcp, "rebuild_damaged": [20, 21, 22, 23, 60]}, tmp_path / "w5", "hevc10", True,
-                               log=lambda m: None)
-    assert calls == [[60]] and any("4 of the 5 damaged frames named were left" in n and "more than 3" in n for n in rec.notes)
+    monkeypatch.setattr(pv, "_still_runs", lambda feed, runs: (runs, []))
+    rec = pv.add_interpolation(record(), four, tmp_path / "w5", "hevc10", True, log=lambda m: None)
+    assert calls == [[20, 21, 22, 23, 60]] and rec.prepass["rebuild_damaged"]["left"] == 0
+    calls.clear()
+    monkeypatch.setattr(pv, "_still_runs", lambda feed, runs: ([r for r in runs if r[1] - r[0] < 3],
+                                                               [[a, z, 0.8] for a, z in runs if z - a >= 3]))
+    rec = pv.add_interpolation(record(), four, tmp_path / "w6", "hevc10", True, log=lambda m: None)
+    assert calls == [[60]] and any("4 of the 5 damaged frames named were left" in n and "a scene that moves" in n for n in rec.notes)
+    assert rec.prepass["rebuild_damaged"]["runs_in_movement"] == [[20, 23, 0.8]]
+    # seven in a row are left whatever the scene does
+    calls.clear()
+    rec = pv.add_interpolation(record(), {**rcp, "rebuild_damaged": [20, 21, 22, 23, 24, 25, 26, 60]}, tmp_path / "w7",
+                               "hevc10", True, log=lambda m: None)
+    assert calls == [[60]]
     # the check fails: no second file at all
     monkeypatch.setattr(gv, "verify_remade", lambda a, b, **k: GuardReport(False, [gv.Gate("remade", "fail", 0.2, 0.75, "")]))
     rec = pv.add_interpolation(record(), {**rcp, "rebuild_damaged": [10]}, tmp_path / "w3", "hevc10", True, log=lambda m: None)
@@ -333,5 +351,26 @@ def test_a_run_is_made_from_the_sound_frames_either_side_and_the_rest_passes_thr
     assert np.array_equal(got[12][:40], stored[12][:40])                 # well above the tear: the stored frame itself
     rep = gv.verify_remade(feed, out, rebuilt=[5, 12, 13])
     assert rep.passed, rep.failed()
-    # more than three in a row: refused, the caller leaves such runs out
-    assert "more than 3" in rebuild.rebuild(feed, out, [3, 4, 5, 6], tmp_path / "w2", log=lambda m: None)["error"]
+    # more than six in a row: refused, the caller leaves such runs out
+    assert "more than 6" in rebuild.rebuild(feed, out, list(range(3, 10)), tmp_path / "w2", log=lambda m: None)["error"]
+    # a long run is made only between two frames that show nearly the same picture
+    assert pv._still_runs(feed, [[5, 5], [12, 13]]) == ([[5, 5], [12, 13]], [])          # nothing long: nothing read
+    calm = write(tmp_path / "calm.mkv", [a] * 24)
+    kept, moving = pv._still_runs(calm, [[5, 5], [8, 11]])
+    assert kept == [[5, 5], [8, 11]] and moving == []                                    # a held picture: still enough
+    far = write(tmp_path / "far.mkv", [np.roll(a, 9 * k, axis=0) for k in range(24)])    # nine pixels a frame
+    kept, moving = pv._still_runs(far, [[5, 5], [8, 11]])
+    assert kept == [[5, 5]] and moving[0][:2] == [8, 11] and moving[0][2] > 0.3
+
+
+def test_a_long_run_needs_two_ends_that_show_the_same_picture():
+    from vidimg import rebuild
+
+    a = _picture(1)
+    assert rebuild.still_enough(a, a) == (True, 0.0)
+    talking = a.copy()
+    talking[100:150, 150:230] = 255 - talking[100:150, 150:230]         # a mouth moves: a small part of the frame
+    ok, share = rebuild.still_enough(a, talking)
+    assert ok and 0 < share < 0.2
+    ok, share = rebuild.still_enough(a, _picture(2))
+    assert not ok and share > 0.6

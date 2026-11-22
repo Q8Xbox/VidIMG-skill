@@ -20,8 +20,11 @@ Damaged frames in a row are each other's neighbour, so none of them has two neig
 as a run: up to RUN_MAX frames between two frames that agree with each other, every one of which stands out from
 both of those. Measured on an owner cartoon with tape tearing (2026-11-22): of 22 damaged frames among the single
 candidates, 10 sat beside another damaged frame and could not be made again one by one. A run is made again
-from the sound frame before it and the sound frame after it. Longer runs are not found: over more than a few
-frames the picture has moved on, and what lies between two distant frames would be guessed, not rebuilt.
+from the sound frame before it and the sound frame after it. Runs of up to RUN_STILL frames are found where
+those two frames show nearly the same picture (at most STILL_CELLS of the cells differ): a scene that holds
+still loses nothing when six frames are made from its two ends, and on the owner cartoon that covered runs of
+four and five torn frames. In a moving scene, and beyond RUN_STILL frames, what lies between two distant frames
+would be guessed, not rebuilt: such runs are not found.
 
 One reading is a hint for the look, not a verdict: "flash" when the frame itself is nearly one flat tone. A
 storm scene of an owner cartoon had 31 of these, white and black, between identical neighbours (2026-11-22):
@@ -47,7 +50,11 @@ CELL_OUT = 10.0                 # 8-bit levels a cell must differ from BOTH neig
 CELL_AGREE = 0.4                # ... while the neighbours differ from each other by less than this share of it
 SHARE_MIN = 0.05                # share of cells standing out from which a frame is a candidate
 FLASH_STD = 10.0                # 8-bit levels: a frame flatter than this is one tone
-RUN_MAX = 3                     # damaged frames in a row that are looked for (and can be made again)
+RUN_MAX = 3                     # damaged frames in a row that are looked for (and can be made again) in any scene
+RUN_STILL = 6                   # ... and where the frames either side of the run show nearly the same picture
+STILL_CELLS = 0.3               # share of cells that may differ by more than CELL_OUT between those two frames.
+                                # Measured on the owner cartoon, a talking scene, sound frames 4 to 7 apart:
+                                # 10-25 %. A pan or a cut changes most of the frame
 MAX_LISTED = 200                # candidates kept (the largest first); more than this is not a few damaged frames
 
 
@@ -55,7 +62,7 @@ MAX_LISTED = 200                # candidates kept (the largest first); more than
 class Damage:
     frames: int = 0
     found: list = field(default_factory=list)       # [{frame, share, level, looks, lone}], in frame order
-    runs: list = field(default_factory=list)        # [{first, last, share}]: 2..RUN_MAX damaged frames in a row
+    runs: list = field(default_factory=list)        # [{first, last, share}]: 2..RUN_STILL damaged frames in a row
     total: int = 0                                  # candidates before the list was cut to MAX_LISTED
     error: str | None = None
 
@@ -97,24 +104,42 @@ class Finder:
         if self.before is not None:
             self._judge(self.n - 1, self.before, self.middle, after)
         self.before, self.middle = self.middle, after
-        self.recent = (self.recent + [after])[-(RUN_MAX + 2):]
+        self.recent = (self.recent + [after])[-(RUN_STILL + 2):]
         self._judge_runs(self.n)
         self.n += 1
 
     def _judge_runs(self, n: int) -> None:
-        """Frame n has just arrived: do the 2..RUN_MAX frames before it all stand out from it and from the frame
-        before them, while those two agree?"""
+        """Frame n has just arrived: do the 2..RUN_STILL frames before it all stand out from it and from the frame
+        before them, while those two agree (for more than RUN_MAX frames: show nearly the same picture)?"""
+        if len(self.recent) < 4:
+            return
         after = self.recent[-1]
-        for length in range(2, RUN_MAX + 1):
+        size = (GRID[1], GRID[0])
+
+        def apart(x: np.ndarray, y: np.ndarray) -> float:
+            return float((cv2.resize(np.abs(x - y), size, interpolation=cv2.INTER_AREA) > CELL_OUT).mean())
+
+        if apart(self.recent[-2], after) < SHARE_MIN:
+            return                                           # the frame before this one is like it: no run ends here
+        # the longest run first: a shorter one inside it would start from a damaged frame (five torn frames were
+        # listed as the last three of them, to be made from the second)
+        for length in range(RUN_STILL, 1, -1):
             if len(self.recent) < length + 2:
-                break
+                continue
             first = n - length
             if self.runs and self.runs[-1]["last"] >= first:
                 continue                                     # these frames already belong to a run
             before = self.recent[-length - 2]
-            shares = [float(_cells(before, x, after)[0].mean()) for x in self.recent[-length - 1:-1]]
+            if length > RUN_MAX and apart(before, after) > STILL_CELLS:
+                continue
+            shares = []
+            for x in self.recent[-length - 1:-1]:
+                shares.append(float(_cells(before, x, after)[0].mean()))
+                if shares[-1] < SHARE_MIN:
+                    break
             if min(shares) >= SHARE_MIN:
                 self.runs.append({"first": first, "last": n - 1, "share": round(float(np.mean(shares)), 3)})
+                break
 
     def _judge(self, i: int, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> None:
         out, least = _cells(a, b, c)
