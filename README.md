@@ -84,7 +84,9 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
     or a blink, drawn on purpose, and no measurement tells them apart, so whoever supervises looks and names the
     damaged ones. No model restores a torn frame. On request (`rebuild_damaged`) the named frames are made again
     from their two neighbours by RIFE, in the second file only; its check confirms every other frame is unchanged
-    and that the made frames stand out less than the ones they replace. Two damaged frames in a row are not found.
+    and that the made frames stand out less than the ones they replace. Two or three damaged frames in a row are
+    found as a run and made from the sound frames either side of it; and only the part of a frame that differs
+    from the made one is replaced, so the sound part of a torn frame stays the source's own.
   - **Settings by kind of scene.** The survey splits each video at its cuts and sorts the scenes into up to six
     kinds by light, motion and detail, with a sheet showing each. A recipe's `per_kind` gives a kind its own
     texture strength, another strength of a filter, or leaves a filter out there; a step's `kinds` limits it to

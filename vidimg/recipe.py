@@ -17,7 +17,8 @@ restoration. There are no paths in the pipeline; it runs the recipe.
      "rebuild_damaged": [1184, 16060]         ONLY when the person asks: these frames of the SOURCE (numbered from 0),
                                               which whoever supervises judged to be damage (a torn or dropped-out
                                               frame, not a flash drawn on purpose), are made again from their two
-                                              neighbours in that second file (created frames too)
+                                              neighbours in that second file (created frames too). Frames named
+                                              side by side (up to 3) are made as a run from the frames around it
      "per_kind": {"k3": {"texture": 0.5, "steps": {"deblock": "strong", "dehalo": false}}}
                                               what a kind of scene gets differently (the kinds are the ones the survey
                                               found in THIS video, probe/scenes.py): its own texture strength, another
@@ -257,7 +258,9 @@ def validate(recipe: dict, blocks: dict | None = None) -> tuple[dict, list[str]]
     if remake:
         warnings.append(f"rebuild_damaged: {len(remake)} frame(s) are made again from their neighbours in a second "
                         "file; those frames are created, not original picture, and the faithful file keeps them "
-                        "as they are. A frame next to another named frame, or at a cut, cannot be made and is left")
+                        "as they are. Frames named side by side are made as a run from the frames either side "
+                        "of it (up to 3 in a row; longer runs are left). Only the part of a frame that differs "
+                        "from the made one is replaced")
     out = {"faces": faces, "steps": steps, "models": models, "model_strict": bool(recipe.get("model_strict")),
            "scale": scale, "texture": None if texture is None else float(texture),
            "interpolate": None if more is None else int(more), "rebuild_ghosts": bool(again), "per_kind": per,

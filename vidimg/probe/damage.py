@@ -16,8 +16,12 @@ differs from both neighbours by more than CELL_OUT levels while the neighbours d
 CELL_AGREE of that. A frame is a candidate when at least SHARE_MIN of its cells stand out. Candidates next to
 another candidate are a run (a flicker, a strobe): reported, but not offered for rebuilding.
 
-Only single frames are found. Two damaged frames in a row are each other's neighbour, so neither has two
-neighbours that agree, and neither is a candidate; a rebuild would have nothing sound to work from either.
+Damaged frames in a row are each other's neighbour, so none of them has two neighbours that agree. They are found
+as a run: up to RUN_MAX frames between two frames that agree with each other, every one of which stands out from
+both of those. Measured on an owner cartoon with tape tearing (2026-11-22): of 22 damaged frames among the single
+candidates, 10 sat beside another damaged frame and could not be made again one by one. A run is made again
+from the sound frame before it and the sound frame after it. Longer runs are not found: over more than a few
+frames the picture has moved on, and what lies between two distant frames would be guessed, not rebuilt.
 
 One reading is a hint for the look, not a verdict: "flash" when the frame itself is nearly one flat tone. A
 storm scene of an owner cartoon had 31 of these, white and black, between identical neighbours (2026-11-22):
@@ -43,6 +47,7 @@ CELL_OUT = 10.0                 # 8-bit levels a cell must differ from BOTH neig
 CELL_AGREE = 0.4                # ... while the neighbours differ from each other by less than this share of it
 SHARE_MIN = 0.05                # share of cells standing out from which a frame is a candidate
 FLASH_STD = 10.0                # 8-bit levels: a frame flatter than this is one tone
+RUN_MAX = 3                     # damaged frames in a row that are looked for (and can be made again)
 MAX_LISTED = 200                # candidates kept (the largest first); more than this is not a few damaged frames
 
 
@@ -50,6 +55,7 @@ MAX_LISTED = 200                # candidates kept (the largest first); more than
 class Damage:
     frames: int = 0
     found: list = field(default_factory=list)       # [{frame, share, level, looks, lone}], in frame order
+    runs: list = field(default_factory=list)        # [{first, last, share}]: 2..RUN_MAX damaged frames in a row
     total: int = 0                                  # candidates before the list was cut to MAX_LISTED
     error: str | None = None
 
@@ -83,13 +89,32 @@ class Finder:
         self.before = self.middle = None
         self.n = 0
         self.rows: list[dict] = []
+        self.recent: list[np.ndarray] = []           # the last RUN_MAX + 2 frames
+        self.runs: list[dict] = []
 
     def add(self, frame: np.ndarray) -> None:
         after = frame.astype(np.float32)
         if self.before is not None:
             self._judge(self.n - 1, self.before, self.middle, after)
         self.before, self.middle = self.middle, after
+        self.recent = (self.recent + [after])[-(RUN_MAX + 2):]
+        self._judge_runs(self.n)
         self.n += 1
+
+    def _judge_runs(self, n: int) -> None:
+        """Frame n has just arrived: do the 2..RUN_MAX frames before it all stand out from it and from the frame
+        before them, while those two agree?"""
+        after = self.recent[-1]
+        for length in range(2, RUN_MAX + 1):
+            if len(self.recent) < length + 2:
+                break
+            first = n - length
+            if self.runs and self.runs[-1]["last"] >= first:
+                continue                                     # these frames already belong to a run
+            before = self.recent[-length - 2]
+            shares = [float(_cells(before, x, after)[0].mean()) for x in self.recent[-length - 1:-1]]
+            if min(shares) >= SHARE_MIN:
+                self.runs.append({"first": first, "last": n - 1, "share": round(float(np.mean(shares)), 3)})
 
     def _judge(self, i: int, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> None:
         out, least = _cells(a, b, c)
@@ -103,7 +128,8 @@ class Finder:
         at = {r["frame"] for r in self.rows}
         rows = [r | {"lone": r["frame"] - 1 not in at and r["frame"] + 1 not in at} for r in self.rows]
         kept = sorted(sorted(rows, key=lambda r: -r["share"])[:MAX_LISTED], key=lambda r: r["frame"])
-        return Damage(frames=self.n, found=kept, total=len(rows))
+        runs = sorted(sorted(self.runs, key=lambda r: -r["share"])[:MAX_LISTED], key=lambda r: r["first"])
+        return Damage(frames=self.n, found=kept, total=len(rows), runs=runs)
 
 
 def find(frames) -> Damage:
