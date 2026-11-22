@@ -150,7 +150,7 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
               damaged.sheet to be real damage (tape tearing, dropouts, broken blocks), never a flash or a frame
               drawn that way. They are made again from their two neighbours in that second file; the faithful
               file keeps them. Tell the person how many frames are created. Frames named side by side
-              (up to 3: see damaged.runs) are made as a run from the sound frames around it, so name a damaged
+              (up to 3, or up to 6 where the scene holds still: see damaged.runs) are made as a run from the sound frames around it, so name a damaged
               neighbour together with its frame. Only the part of a frame that differs from the made one is
               replaced.
               "per_kind": {"k3": {"texture": 0.5, "steps": {"deblock": "strong", "dehalo": false}}} when a kind

@@ -151,7 +151,7 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
                          "what": f"{damaged['count']} single frames show something neither neighbour shows "
                                  f"(candidates: {', '.join(map(str, damaged['frames'][:12]))}"
                                  + (", ..." if damaged["count"] > 12 else "") + ")"
-                                 + (f", and {len(damaged['runs'])} runs of two or three frames stand out together"
+                                 + (f", and {len(damaged['runs'])} runs of two to six frames stand out together"
                                     if damaged.get("runs") else "") + "; a model sharpens real damage",
                          "decision": "recipe: rebuild_damaged: [frame numbers] (created frames, in a second file; only "
                                      "the frames you judged to be damage, and only when the person wants them made again)",
@@ -231,7 +231,7 @@ def _damaged(item_id: str, src: Path, out: Path, got, log) -> dict | None:
         statefile.write_json(where, got.to_dict())
         sheet = closeups.damage_sheet(src, out / "survey" / f"{item_id}_damaged.jpg", got.found, runs=got.runs,
                                       title=f"{item_id}  {src.name}: {len(cands)} candidate damaged frames, {len(runs)} runs")
-        log(f"   {item_id}: {len(cands)} candidate damaged frames, {len(runs)} runs of two or three, "
+        log(f"   {item_id}: {len(cands)} candidate damaged frames, {len(runs)} runs of two to six, "
             f"{len(flashes)} one-tone flashes, {got.total - len(lone)} in a flicker")
         return {"count": len(cands), "frames": [d["frame"] for d in cands[:DAMAGED_LISTED]], "flashes": len(flashes),
                 "runs": [[r["first"], r["last"]] for r in runs[:DAMAGED_LISTED]],
@@ -481,8 +481,8 @@ def _next_step(plan: dict, states: list) -> str | None:
                 "frame; it can only be made again from its neighbours, which is a created frame. Tell the "
                 "person what you found, and ONLY if they want such frames made again name the ones you judged "
                 "to be damage in the recipe's `rebuild_damaged`: [frame numbers]; they are then made again in "
-                "a second file and the faithful file keeps them as they are. `damaged.runs` are two or three "
-                "frames in a row that stand out together: to have such a run made again, name every frame "
+                "a second file and the faithful file keeps them as they are. `damaged.runs` are two to six "
+                "frames in a row that stand out together (more than three only where the scene holds still): to have such a run made again, name every frame "
                 "of it. Check each neighbour on the sheet as well: a frame is made from the frames either "
                 "side of it, so when a neighbour is damaged too, name it with the frame (a run), or leave "
                 "both. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "

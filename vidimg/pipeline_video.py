@@ -1526,6 +1526,28 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
                                        drawn=drawn, shape_ref=shape_ref, kinds=ctx), recipe, work, encoder, drawn, log)
 
 
+def _still_runs(feed: Path, runs: list) -> tuple[list, list]:
+    """Runs longer than rebuild.RUN_MAX are kept only where the sound frames either side show nearly the same
+    picture. Returns (the runs to make, the long runs left because the scene moves: [first, last, share])."""
+    from . import rebuild as rebuild_mod
+    from .guard.video import _luma8
+
+    long = [r for r in runs if r[1] - r[0] + 1 > rebuild_mod.RUN_MAX]
+    if not long:
+        return runs, []
+    moving = []
+    with tempfile.TemporaryDirectory(prefix="vidimg_still_") as tmp:
+        files = _frames_by_index(feed, sorted({k for a, z in long for k in (a - 1, z + 1)}), Path(tmp), "o",
+                                 pre_vf="extractplanes=y")
+        for a, z in long:
+            x, y = (_luma8(files[k]) if k in files else None for k in (a - 1, z + 1))
+            ok, share = rebuild_mod.still_enough(x, y) if x is not None and y is not None else (False, 1.0)
+            if not ok:
+                moving.append([a, z, share])
+    gone = {(a, z) for a, z, _ in moving}
+    return [r for r in runs if tuple(r) not in gone], moving
+
+
 INTERPOLATE_MAX_FPS = 61.0      # nothing is gained above 60 fps
 RIFE_MODEL = "rife-v4.26"       # the anime model of Video2X 6.4.0 fails to run (error -1, 2026-11-21)
 
@@ -1624,16 +1646,19 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
         n_src = media.probe(origin, exact=True)["frames"] if origin.exists() else info["frames"]
         here = sorted({i if n_src == info["frames"] else round(i * info["frames"] / max(1, n_src)) for i in damaged})
         runs = [r for r in rebuild_mod.runs_of(here)
-                if r[1] - r[0] + 1 <= rebuild_mod.RUN_MAX and r[0] > 0 and r[1] < info["frames"] - 1]
+                if r[1] - r[0] + 1 <= rebuild_mod.RUN_STILL and r[0] > 0 and r[1] < info["frames"] - 1]
+        runs, moving = _still_runs(feed, runs)
         ok = [i for a, z in runs for i in range(a, z + 1)]
         left = len(here) - len(ok)
         rec.prepass["rebuild_damaged"] = {"asked": len(damaged), "made_from_neighbours": len(ok), "left": left,
                                           "in_runs": sum(z - a + 1 for a, z in runs if z > a),
+                                          "runs_in_movement": moving,
                                           "by_time": n_src != info["frames"]}
         if left:
             rec.notes.append(f"{left} of the {len(damaged)} damaged frames named were left as they are: each is in a "
-                             f"run of more than {rebuild_mod.RUN_MAX} named frames or at the very start or end, so "
-                             "there is no sound frame close enough on both sides")
+                             f"run of more than {rebuild_mod.RUN_MAX} named frames in a scene that moves, in one of "
+                             f"more than {rebuild_mod.RUN_STILL}, or at the very start or end, so there is no sound "
+                             "frame close enough on both sides")
         if ok:
             fixed = idir / "remade" / "feed.mkv"
             r = rebuild_mod.rebuild(feed, fixed, ok, idir / "remake", drawn=drawn, log=log, what="damaged frames",
