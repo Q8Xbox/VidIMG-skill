@@ -1615,23 +1615,29 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
                 why = r.get("error") or ("its check failed: " + ", ".join(rep_.failed()) if rep_ is not None else "failed")
                 log(f"   ghost frames in movement: not made again ({why})")
                 rec.notes.append(f"ghost frames in movement not made again: {why}")
-    remade = 0
+    remade, remade_picture = 0, None
     if damaged:
         # named by their number in the SOURCE. After a step that changed the frame count they are found by their
-        # time; a frame beside another named frame has no sound neighbour to be made from and is left
+        # time. Frames named side by side are a run, made from the sound frames either side of it; a run longer
+        # than rebuild.RUN_MAX, or one at the very start or end, has nothing sound close enough and is left
         origin = Path(rec.source)
         n_src = media.probe(origin, exact=True)["frames"] if origin.exists() else info["frames"]
         here = sorted({i if n_src == info["frames"] else round(i * info["frames"] / max(1, n_src)) for i in damaged})
-        ok = [i for i in here if 0 < i < info["frames"] - 1 and i - 1 not in here and i + 1 not in here]
+        runs = [r for r in rebuild_mod.runs_of(here)
+                if r[1] - r[0] + 1 <= rebuild_mod.RUN_MAX and r[0] > 0 and r[1] < info["frames"] - 1]
+        ok = [i for a, z in runs for i in range(a, z + 1)]
         left = len(here) - len(ok)
         rec.prepass["rebuild_damaged"] = {"asked": len(damaged), "made_from_neighbours": len(ok), "left": left,
+                                          "in_runs": sum(z - a + 1 for a, z in runs if z > a),
                                           "by_time": n_src != info["frames"]}
         if left:
-            rec.notes.append(f"{left} of the {len(damaged)} damaged frames named were left as they are: each sits "
-                             "beside another named frame or at the very start or end, so it has no sound neighbour")
+            rec.notes.append(f"{left} of the {len(damaged)} damaged frames named were left as they are: each is in a "
+                             f"run of more than {rebuild_mod.RUN_MAX} named frames or at the very start or end, so "
+                             "there is no sound frame close enough on both sides")
         if ok:
             fixed = idir / "remade" / "feed.mkv"
-            r = rebuild_mod.rebuild(feed, fixed, ok, idir / "remake", drawn=drawn, log=log, what="damaged frames")
+            r = rebuild_mod.rebuild(feed, fixed, ok, idir / "remake", drawn=drawn, log=log, what="damaged frames",
+                                    regions=True)
             rep_ = verify_remade(feed, fixed, rebuilt=ok) if r.get("ok") else None
             rec.prepass["rebuild_damaged"].update(r, guard_passed=bool(rep_ and rep_.passed), guard={} if rep_ is None else {
                 g.name: {"status": g.status, "value": g.value, "detail": g.detail} for g in rep_.gates})
@@ -1639,6 +1645,7 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
                 log(f"   damaged frames: {len(ok)} made again from their neighbours, guard PASS")
                 feed.unlink(missing_ok=True)
                 feed, remade = fixed, len(ok)
+                remade_picture = r.get("picture_created")
             else:
                 why = r.get("error") or ("its check failed: " + ", ".join(rep_.failed()) if rep_ is not None else "failed")
                 log(f"   damaged frames: not made again ({why})")
@@ -1697,7 +1704,9 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
     if made_again:
         parts.append(f"{made_again} ghost frames that no neighbour could stand in for were made again from their neighbours")
     if remade:
-        parts.append(f"{remade} damaged frames were made again from their neighbours")
+        parts.append(f"{remade} damaged frames were made again from their neighbours"
+                     + (f" (only where they differ from the made frame: {remade_picture:g} frames' worth of picture "
+                        "in all; the rest of each is the stored frame)" if remade_picture is not None else ""))
     rec.notes.append(f"a second file ({dst.name}) was written because it was asked for: of its {made} frames, "
                      + " and ".join(parts) + ". Those are not original picture (they can morph fast movement); every "
                      "other frame in it is unchanged. The faithful file at the original rate is the delivered one"

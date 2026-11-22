@@ -221,15 +221,36 @@ def frames_numbered(src: Path, numbers: list[int]) -> dict[int, np.ndarray]:
 DAMAGE_SHOWN = 12               # candidates on the sheet (the largest first)
 
 
-def damage_sheet(src: Path, dst: Path, found: list[dict], *, title: str = "") -> Path | None:
-    """Candidate damaged frames (probe.damage), each between its two neighbours. Damage, or a frame drawn that
-    way (a flash, lightning, an impact frame)? Only a look can say; the measurement cannot."""
+RUNS_SHOWN = 8                  # runs of damaged frames on the sheet (the largest first)
+
+
+def damage_sheet(src: Path, dst: Path, found: list[dict], *, title: str = "", runs: list[dict] | None = None) -> Path | None:
+    """Candidate damaged frames (probe.damage), each between its two neighbours, and candidate runs (frames in a
+    row between two frames that agree). Damage, or frames drawn that way (a flash, lightning, an impact frame)?
+    Only a look can say; the measurement cannot."""
     src, dst = Path(src), Path(dst)
     shown = sorted((d for d in found if d.get("lone")), key=lambda d: (d.get("looks") == "flash", -d["share"]))[:DAMAGE_SHOWN]
-    frames = frames_numbered(src, [d["frame"] + k for d in shown for k in (-1, 0, 1)])
+    long = sorted(runs or [], key=lambda r: -r["share"])[:RUNS_SHOWN]
+    frames = frames_numbered(src, [d["frame"] + k for d in shown for k in (-1, 0, 1)]
+                             + [n for r in long for n in range(r["first"] - 1, r["last"] + 2)])
     width = CELL[0] * ZOOM * 3
     cw = width // 3
     rows: list[np.ndarray] = []
+    for r in sorted(long, key=lambda r: r["first"]):
+        numbers = list(range(r["first"] - 1, r["last"] + 2))
+        if not all(n in frames for n in numbers):
+            continue
+        rw = width // len(numbers)
+        cells = []
+        for n in numbers:
+            f = frames[n]
+            small = cv2.resize(f, (rw, round(f.shape[0] * rw / f.shape[1])), interpolation=cv2.INTER_AREA)
+            inside = r["first"] <= n <= r["last"]
+            cells.append(_label(small, f"frame {n}" + (" RUN?" if inside else ""), (0, 255, 255) if inside else (255, 255, 255)))
+        head = np.full((26, width, 3), 30, np.uint8)
+        cv2.putText(head, f"frames {r['first']}-{r['last']} in a row, between two frames that agree ({r['share']:.0%} stands out)",
+                    (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        rows += [head, _row(cells, width)]
     for d in sorted(shown, key=lambda d: d["frame"]):
         i = d["frame"]
         if not all(i + k in frames for k in (-1, 0, 1)):

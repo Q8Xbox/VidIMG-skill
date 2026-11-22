@@ -13,6 +13,14 @@ shows one of the two scenes.
 How: the frames before and after every ghost are written out as pairs, RIFE doubles that clip (the frame between
 each pair is what is wanted, at index 4k+1), and the video is written again with those frames in the ghosts'
 places. Every other frame passes through as stored.
+
+The same is done for damaged frames (probe/damage.py), with two additions:
+  * runs: up to RUN_MAX frames in a row are made from the sound frame before the run and the sound frame after
+    it. RIFE is asked for as many frames between that pair as the run is long (a run of two: the pair tripled,
+    the frames at one third and two thirds).
+  * regions: a torn frame is usually sound over most of its area. Where the stored frame agrees with the frame
+    made for it, the stored frame is kept; only the part that differs is taken from the made frame, with a soft
+    edge. Less of the picture is created, and what is kept is the source's own.
 """
 
 from __future__ import annotations
@@ -22,11 +30,18 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Iterator
 
+import cv2
+import numpy as np
+
 from . import media
 from .adapters import video2x
 
 PIX = "yuv420p10le"
 RIFE_MODEL = "rife-v4.26"
+RUN_MAX = 3                     # frames in a row made from one pair of sound frames (probe.damage finds as many)
+REGION_GRID = (9, 12)           # rows, columns of cells in which a stored frame is compared with the made one
+REGION_OUT = 10.0               # 8-bit levels: a cell differing more than this is taken from the made frame
+REGION_WHOLE = 0.6              # share of cells from which the whole frame is taken (nothing sound is left to keep)
 
 
 def _stream(path: Path) -> dict:
@@ -72,88 +87,165 @@ def _close(p: subprocess.Popen) -> bool:
     return p.wait() == 0
 
 
-def write_pairs(feed: Path, dst: Path, ghosts: list[int]) -> int:
-    """The frame before and the frame after each ghost, in order, as one clip. Returns how many pairs were written."""
+def runs_of(frames: list[int]) -> list[list[int]]:
+    """[first, last] of every stretch of consecutive frame numbers."""
+    out: list[list[int]] = []
+    for i in sorted({int(f) for f in frames}):
+        if out and out[-1][1] == i - 1:
+            out[-1][1] = i
+        else:
+            out.append([i, i])
+    return out
+
+
+def write_pairs(feed: Path, dst: Path, runs: list[list[int]]) -> int:
+    """The frame before and the frame after each run, in order, as one clip. Returns how many pairs were written.
+    A list of frame numbers is read as runs of one."""
+    runs = [[r, r] if isinstance(r, int) else list(r) for r in runs]
     s = _stream(feed)
-    want = set(ghosts)
+    first_of = {a: z for a, z in runs}
     out = _writer(dst, s["width"], s["height"], s["rate"])
-    before = middle = None
+    waiting: dict[int, bytes] = {}                          # frame number wanted as the "after" -> its "before"
     n = pairs = 0
     try:
-        for after in _frames(feed, s["width"], s["height"]):
-            if n - 1 in want and before is not None:        # `middle` is frame n-1: the ghost; its neighbours are at hand
-                out.stdin.write(before)
-                out.stdin.write(after)
+        for frame in _frames(feed, s["width"], s["height"]):
+            if n in waiting:                                # the first sound frame after a run
+                out.stdin.write(waiting.pop(n))
+                out.stdin.write(frame)
                 pairs += 1
-            before, middle = middle, after
+            if n + 1 in first_of and (n + 1 not in waiting):
+                waiting[first_of[n + 1] + 1] = frame        # a run starts with the next frame: this is its "before"
             n += 1
     finally:
         ok = _close(out)
     return pairs if ok else 0
 
 
-def compose(feed: Path, mids: Path, dst: Path, ghosts: list[int]) -> tuple[int, int]:
-    """`feed` with each ghost replaced by the frame RIFE made between its neighbours (index 4k+1 of `mids`).
-    Returns (frames written, frames replaced)."""
+def _planes(buf: bytes, width: int, height: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    y = width * height
+    c = (width // 2) * (height // 2)
+    a = np.frombuffer(buf, "<u2")
+    return (a[:y].reshape(height, width), a[y:y + c].reshape(height // 2, width // 2),
+            a[y + c:y + 2 * c].reshape(height // 2, width // 2))
+
+
+def blend_region(stored: bytes, made: bytes, width: int, height: int) -> tuple[bytes, float]:
+    """The stored frame with only the part that differs from the made frame taken from it. Returns the frame and
+    the share of the picture that was taken (1.0 = the whole made frame)."""
+    ys, us, vs = _planes(stored, width, height)
+    ym, um, vm = _planes(made, width, height)
+    size = (REGION_GRID[1], REGION_GRID[0])
+    apart = cv2.resize(np.abs(ys.astype(np.float32) - ym.astype(np.float32)) / 4.0, size, interpolation=cv2.INTER_AREA)
+    out = apart > REGION_OUT
+    if float(out.mean()) >= REGION_WHOLE:
+        return made, 1.0
+    if not out.any():
+        return stored, 0.0
+    wide = cv2.dilate(out.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(np.float32)   # one cell around
+    mask = np.clip(cv2.resize(wide, (width, height), interpolation=cv2.INTER_LINEAR), 0.0, 1.0)
+    half = cv2.resize(mask, (width // 2, height // 2), interpolation=cv2.INTER_AREA)
+
+    def mix(a: np.ndarray, b: np.ndarray, m: np.ndarray) -> bytes:
+        return np.clip(a.astype(np.float32) * (1 - m) + b.astype(np.float32) * m + 0.5, 0, 1023).astype("<u2").tobytes()
+
+    return mix(ys, ym, mask) + mix(us, um, half) + mix(vs, vm, half), float(mask.mean())
+
+
+def compose(feed: Path, mids: dict | Path, dst: Path, runs: list, *, regions: bool = False) -> tuple[int, int, float]:
+    """`feed` with the frames of each run replaced by the frames RIFE made between the run's two neighbours.
+    mids: {run length: clip}; in the clip of length L the pair of run k was multiplied by L + 1, so its frames
+    sit at 2k(L+1) + 1 ... + L. A single clip is read as that of runs of one. regions: see the module text.
+    Returns (frames written, frames replaced, picture taken from made frames, in frames' worth)."""
+    runs = [[r, r] if isinstance(r, int) else list(r) for r in runs]
+    if not isinstance(mids, dict):
+        mids = {1: mids}
     s = _stream(feed)
-    order = sorted(ghosts)
-    place = {g: 4 * k + 1 for k, g in enumerate(order)}
-    made = _frames(mids, s["width"], s["height"])
-    at = -1                                             # index of the last frame taken from `mids`
-    out = _writer(dst, s["width"], s["height"], s["rate"], audio_from=feed)
+    w, h = s["width"], s["height"]
+    place: dict[int, tuple[int, int]] = {}                  # frame -> (run length, index in that length's clip)
+    seen: dict[int, int] = {}
+    for a, z in sorted(runs):
+        length = z - a + 1
+        k = seen.get(length, 0)
+        seen[length] = k + 1
+        for j in range(length):
+            place[a + j] = (length, 2 * k * (length + 1) + 1 + j)
+    readers = {length: _frames(Path(clip), w, h) for length, clip in mids.items()}
+    at = {length: -1 for length in readers}                 # index of the last frame taken from each clip
+    out = _writer(dst, w, h, s["rate"], audio_from=feed)
     n = replaced = 0
+    taken = 0.0
     try:
-        for frame in _frames(feed, s["width"], s["height"]):
+        for frame in _frames(feed, w, h):
             target = place.get(n)
-            if target is not None:
+            if target is not None and target[0] in readers:
+                length, index = target
                 new = None
-                while at < target:
-                    new = next(made, None)
-                    at += 1
+                while at[length] < index:
+                    new = next(readers[length], None)
+                    at[length] += 1
                     if new is None:
                         break
                 if new is not None:
-                    frame = new
+                    if regions:
+                        frame, share = blend_region(frame, new, w, h)
+                    else:
+                        frame, share = new, 1.0
                     replaced += 1
+                    taken += share
             out.stdin.write(frame)
             n += 1
     finally:
-        made.close()
+        for r in readers.values():
+            r.close()
         ok = _close(out)
-    return (n, replaced) if ok else (0, 0)
+    return (n, replaced, taken) if ok else (0, 0, 0.0)
 
 
 def rebuild(feed: Path, dst: Path, ghosts: list[int], work: Path, *, drawn: bool = True,
-            log: Callable[[str], None] = print, what: str = "ghost frames in movement") -> dict:
-    """Write `dst`: `feed` (lossless) with the listed frames made again from their neighbours.
-    work: a folder of its own (each stage writes into a sub-folder that does not hold its input).
-    what: how the log names the frames (ghosts, or damaged frames: the same is done to both)."""
+            log: Callable[[str], None] = print, what: str = "ghost frames in movement", regions: bool = False) -> dict:
+    """Write `dst`: `feed` (lossless) with the listed frames made again from their neighbours. Frames listed side
+    by side are a run, made from the frames either side of it (up to RUN_MAX; a longer run is an error: the
+    caller leaves those out). work: a folder of its own (each stage writes into a sub-folder that does not hold
+    its input). what: how the log names the frames. regions: keep the stored frame where it agrees with the
+    made one (see the module text)."""
     feed, dst, work = Path(feed), Path(dst), Path(work)
-    ghosts = sorted({int(g) for g in ghosts})
-    info: dict = {"asked": len(ghosts)}
+    runs = runs_of(ghosts)
+    count = sum(z - a + 1 for a, z in runs)
+    info: dict = {"asked": count, "runs": sum(1 for a, z in runs if z > a)}
+    if any(z - a + 1 > RUN_MAX for a, z in runs):
+        return info | {"ok": False, "error": f"a run of more than {RUN_MAX} frames cannot be made from its neighbours"}
     for sub in ("pairs", "mids"):
         (work / sub).mkdir(parents=True, exist_ok=True)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    pairs = work / "pairs" / "pairs.mkv"
-    wrote = write_pairs(feed, pairs, ghosts)
-    if wrote != len(ghosts):
-        return info | {"ok": False, "error": f"{wrote} of {len(ghosts)} neighbour pairs could be written"}
-    mids = work / "mids" / "mids.mkv"
-    r = video2x.run(pairs, mids, "rife", content="anime" if drawn else "real", fps_multiplier=2, model=RIFE_MODEL,
-                    codec="ffv1", extra={})
-    if not r.ok:
-        return info | {"ok": False, "error": f"RIFE failed: {r.error}"}
-    got = media.probe(mids, exact=True)["frames"]
-    if got < 4 * len(ghosts) - 2:                       # 2 frames per pair, doubled: 4k - 1 (one fewer is tolerated)
-        return info | {"ok": False, "error": f"RIFE returned {got} frames for {len(ghosts)} pairs"}
-    frames, replaced = compose(feed, mids, dst, ghosts)
+    mids: dict[int, Path] = {}
+    made_files = []
+    for length in sorted({z - a + 1 for a, z in runs}):
+        mine = [r for r in runs if r[1] - r[0] + 1 == length]
+        pairs = work / "pairs" / ("pairs.mkv" if length == 1 else f"pairs_{length}.mkv")
+        wrote = write_pairs(feed, pairs, mine)
+        if wrote != len(mine):
+            return info | {"ok": False, "error": f"{wrote} of {len(mine)} neighbour pairs could be written"}
+        clip = work / "mids" / ("mids.mkv" if length == 1 else f"mids_{length}.mkv")
+        r = video2x.run(pairs, clip, "rife", content="anime" if drawn else "real", fps_multiplier=length + 1,
+                        model=RIFE_MODEL, codec="ffv1", extra={})
+        if not r.ok:
+            return info | {"ok": False, "error": f"RIFE failed: {r.error}"}
+        got = media.probe(clip, exact=True)["frames"]
+        # 2 frames per pair, multiplied: the last pair's frames end at 2(k-1)(L+1) + L; one fewer is tolerated
+        if got < 2 * (len(mine) - 1) * (length + 1) + length + 1 - 1:
+            return info | {"ok": False, "error": f"RIFE returned {got} frames for {len(mine)} pairs (runs of {length})"}
+        mids[length] = clip
+        made_files += [pairs, clip]
+    frames, replaced, taken = compose(feed, mids, dst, runs, regions=regions)
     if frames:
         # the frames were written anew from a pipe, which starts the video at zero: a feed whose sound starts
         # later or earlier than its picture lost that offset here, and the copy's check refused it (a test cut
         # with a 2.6 s offset, 2026-11-22)
         media.fix_av_offset(feed, dst)
-    log(f"   {what}: {replaced} of {frames} frames made again from their neighbours")
-    for f in (pairs, mids):
+    log(f"   {what}: {replaced} of {frames} frames made again from their neighbours"
+        + (f" ({taken:.1f} frames' worth of picture taken from the made frames)" if regions else ""))
+    for f in made_files:
         f.unlink(missing_ok=True)
-    return info | {"ok": bool(frames) and replaced == len(ghosts), "frames": frames, "replaced": replaced,
-                   "error": None if replaced == len(ghosts) else f"{replaced} of {len(ghosts)} frames were replaced"}
+    return info | {"ok": bool(frames) and replaced == count, "frames": frames, "replaced": replaced,
+                   **({"picture_created": round(taken, 2)} if regions else {}),
+                   "error": None if replaced == count else f"{replaced} of {count} frames were replaced"}

@@ -146,11 +146,13 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
         close = None
         log(f"   {item_id}: close-ups failed ({e})")
     scene_map, damaged = _scene_map(item_id, src, out, log)
-    if damaged and damaged.get("frames"):
+    if damaged and (damaged.get("frames") or damaged.get("runs")):
         findings.append({"finding": "damaged_frames",
                          "what": f"{damaged['count']} single frames show something neither neighbour shows "
                                  f"(candidates: {', '.join(map(str, damaged['frames'][:12]))}"
-                                 + (", ..." if damaged["count"] > 12 else "") + "); a model sharpens real damage",
+                                 + (", ..." if damaged["count"] > 12 else "") + ")"
+                                 + (f", and {len(damaged['runs'])} runs of two or three frames stand out together"
+                                    if damaged.get("runs") else "") + "; a model sharpens real damage",
                          "decision": "recipe: rebuild_damaged: [frame numbers] (created frames, in a second file; only "
                                      "the frames you judged to be damage, and only when the person wants them made again)",
                          "look": "damaged.sheet: tape tearing, dropouts or broken blocks, or a frame drawn that way "
@@ -222,15 +224,17 @@ def _damaged(item_id: str, src: Path, out: Path, got, log) -> dict | None:
         lone = [d for d in got.found if d["lone"]]
         flashes = [d for d in lone if d["looks"] == "flash"]
         cands = sorted((d for d in lone if d["looks"] != "flash"), key=lambda d: -d["share"])
-        if not lone:
+        runs = sorted(got.runs, key=lambda r: -r["share"])
+        if not lone and not runs:
             return None
         where = out / "survey" / f"{item_id}_damaged.json"
         statefile.write_json(where, got.to_dict())
-        sheet = closeups.damage_sheet(src, out / "survey" / f"{item_id}_damaged.jpg", got.found,
-                                      title=f"{item_id}  {src.name}: {len(cands)} candidate damaged frames")
-        log(f"   {item_id}: {len(cands)} candidate damaged frames, {len(flashes)} one-tone flashes, "
-            f"{got.total - len(lone)} in runs")
+        sheet = closeups.damage_sheet(src, out / "survey" / f"{item_id}_damaged.jpg", got.found, runs=got.runs,
+                                      title=f"{item_id}  {src.name}: {len(cands)} candidate damaged frames, {len(runs)} runs")
+        log(f"   {item_id}: {len(cands)} candidate damaged frames, {len(runs)} runs of two or three, "
+            f"{len(flashes)} one-tone flashes, {got.total - len(lone)} in a flicker")
         return {"count": len(cands), "frames": [d["frame"] for d in cands[:DAMAGED_LISTED]], "flashes": len(flashes),
+                "runs": [[r["first"], r["last"]] for r in runs[:DAMAGED_LISTED]],
                 "in_runs": got.total - len(lone), "list": str(where), "sheet": str(sheet) if sheet else None}
     except Exception as e:  # noqa: BLE001
         log(f"   {item_id}: damaged-frame candidates failed ({e})")
@@ -477,7 +481,11 @@ def _next_step(plan: dict, states: list) -> str | None:
                 "frame; it can only be made again from its neighbours, which is a created frame. Tell the "
                 "person what you found, and ONLY if they want such frames made again name the ones you judged "
                 "to be damage in the recipe's `rebuild_damaged`: [frame numbers]; they are then made again in "
-                "a second file and the faithful file keeps them as they are. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
+                "a second file and the faithful file keeps them as they are. `damaged.runs` are two or three "
+                "frames in a row that stand out together: to have such a run made again, name every frame "
+                "of it. Check each neighbour on the sheet as well: a frame is made from the frames either "
+                "side of it, so when a neighbour is damaged too, name it with the frame (a run), or leave "
+                "both. GROW THE LIBRARY: `defects` lists what a restorer looks for and which blocks address "
                 "each; an item's `gaps` are defects it was measured to have that no block addresses. When the "
                 "close-ups show a defect with no block (measured or not), write the block from what you know "
                 "about restoring it (add_block), compare the recipe with and without it (try_recipes), and "

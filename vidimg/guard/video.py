@@ -847,15 +847,18 @@ def verify_remade(src: Path, dst: Path, *, rebuilt: list) -> GuardReport:
     """A copy whose damaged frames were made again from their neighbours (rebuild.py), against the file it was
     made from: same frames, duration, audio, shape; every sampled frame that was NOT made again is the input's;
     and the frames made again stand out from their neighbours less than the damaged ones did (probe.damage's own
-    measure). The made frames are created picture: nothing here vouches for them, the record counts them."""
+    measure; for frames made as a run, against the sound frames either side of the run). The made frames are
+    created picture: nothing here vouches for them, the record counts them."""
     from fractions import Fraction
 
+    from .. import rebuild as rebuild_mod
     from ..probe import damage
 
     src, dst = Path(src), Path(dst)
     a, b = media.probe(src, exact=True), media.probe(dst, exact=True)
     gates = _rate_gates(a, b, Fraction(1), Fraction(1))
     made = sorted({int(i) for i in rebuilt})
+    edge = {i: (f - 1, z + 1) for f, z in rebuild_mod.runs_of(made) for i in range(f, z + 1)}   # frame -> sound neighbours
     total = min(a["frames"], b["frames"])
     # the neighbours of the frames made again are the frames most at risk of a slip by one: they are all checked
     beside = {k for i in made[:40] for k in (i - 1, i + 1) if 0 <= k < total and k not in made}
@@ -863,14 +866,14 @@ def verify_remade(src: Path, dst: Path, *, rebuilt: list) -> GuardReport:
     gates.append(untouched_gate(src, dst, sorted(beside | spread)))
 
     def stands_out(files: dict, i: int) -> float | None:
-        tri = [_luma8(files[k]) if k in files else None for k in (i - 1, i, i + 1)]
+        tri = [_luma8(files[k]) if k in files else None for k in (edge[i][0], i, edge[i][1])]
         if any(x is None for x in tri) or len({x.shape for x in tri}) != 1:
             return None
         small = [cv2.resize(x, (360, max(2, round(x.shape[0] * 360 / x.shape[1]))), interpolation=cv2.INTER_AREA) for x in tri]
         return damage.stand_out(*small)
 
     some = made[::max(1, len(made) // 24)][:24]
-    want = sorted({k for i in some for k in (i - 1, i, i + 1) if 0 <= k < total})
+    want = sorted({k for i in some for k in (edge[i][0], i, edge[i][1]) if 0 <= k < total})
     better = judged = 0
     with tempfile.TemporaryDirectory(prefix="vidimg_remade_") as tmp:
         fa = _frames_by_index(src, want, Path(tmp), "s", pre_vf="extractplanes=y")
