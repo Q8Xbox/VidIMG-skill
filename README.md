@@ -79,6 +79,9 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
     a scene in fast movement are mixes of two pictures the file holds nowhere else: no neighbour can stand in
     for them, so the faithful file keeps them. On request (`rebuild_ghosts`) they are made again from their two
     neighbours by RIFE, in the second file only, with the count in the record.
+  - **Comparison clips.** Every delivered video gets a short clip of a few moments with the source and the
+    result playing side by side and in step, and a second file with frames made again gets one that plays those
+    places four times slower. Stills cannot show flicker, ghosts or a torn frame. The clips are in the report.
   - **Damaged frames.** The survey lists single frames that show something neither neighbour shows, and a sheet
     shows the largest between their neighbours. Tape tearing and dropouts look like that; so do a flash, lightning
     or a blink, drawn on purpose, and no measurement tells them apart, so whoever supervises looks and names the

@@ -191,7 +191,8 @@ def _result(meta: dict) -> dict:
         return {"passed": rec.get("passed"), "delivered": rec.get("delivered"), "chosen": rec.get("chosen"),
                 "plan": rec.get("plan"), "prepass": {k: rec.get("prepass", {}).get(k) for k in ("plan", "engine", "guard_passed")},
                 "final_gates": {k: (g.get("status"), g.get("value")) for k, g in (rec.get("final_gates") or {}).items()},
-                "notes": rec.get("notes"), "report": str(out / "report.html"), "sheets": rec.get("sheets")}
+                "notes": rec.get("notes"), "report": str(out / "report.html"), "sheets": rec.get("sheets"),
+                "clips": rec.get("clips")}
     recs = _read(out / "records.json")
     if not recs:
         return {}

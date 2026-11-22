@@ -500,7 +500,10 @@ def _next_step(plan: dict, states: list) -> str | None:
     if unseen:
         return (f"LOOK at the before/after sheets of {', '.join(unseen)} (result.sheets) and record what you see with "
                 "review_results: good, acceptable (say what is not ideal), or redo (then change the decision with "
-                "decide_plan and run_plan again). The guard passed these; your review is about how they look.")
+                "decide_plan and run_plan again). The guard passed these; your review is about how they look. "
+                "result.clips are short videos of the source beside the result (and of the places where frames were "
+                "made again, slowed down): you cannot play them, so point the person to them; they show what "
+                "stills cannot, such as flicker and single torn frames.")
     return None
 
 
@@ -680,6 +683,7 @@ def _run_video(it: dict, out: Path, log) -> None:
     gates = {k: g.get("status") for k, g in (r.get("final_gates") or {}).items()}
     it.update(result={"chosen": r.get("chosen"), "passed": r.get("passed"), "notes": r.get("notes"),
                       "warnings": [k for k, s in gates.items() if s == "warn"], "sheets": r.get("sheets") or [],
+                      "clips": r.get("clips") or [],
                       **({"interpolated": r["interpolated"]} if r.get("interpolated") else {})},
               delivered=r.get("delivered"), report=str(page),
               state="delivered" if r.get("delivered") else ("preview_done" if d.get("preview_only") and r.get("chosen")
