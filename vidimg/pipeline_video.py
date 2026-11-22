@@ -70,6 +70,7 @@ class VideoRecord:
     attempts: list[VideoAttempt] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     sheets: list[str] = field(default_factory=list)
+    clips: list = field(default_factory=list)       # [{path, what}]: comparison clips for the person (report/clip.py)
     prepass: dict = field(default_factory=dict)
     recipe: dict = field(default_factory=dict)
     interpolated: str | None = None          # the frame-rate copy with created frames, when asked for
@@ -1612,6 +1613,7 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
         shutil.rmtree(idir, ignore_errors=True)
         return rec
     made_again = 0
+    made_frames: list[int] = []                             # where frames were made again, for the comparison clip
     if again:
         # looked for in the source, where a ghost still dips (the model redraws it with firm lines); the frames a
         # neighbour already stands in for are left out. Only when the numbering is the source's own
@@ -1633,6 +1635,7 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
                 log("   ghost frames in movement: guard PASS")
                 feed.unlink(missing_ok=True)
                 feed, made_again = fixed, len(found.found)
+                made_frames += list(found.found)
             else:
                 why = r.get("error") or ("its check failed: " + ", ".join(rep_.failed()) if rep_ is not None else "failed")
                 log(f"   ghost frames in movement: not made again ({why})")
@@ -1673,6 +1676,7 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
                 feed.unlink(missing_ok=True)
                 feed, remade = fixed, len(ok)
                 remade_picture = r.get("picture_created")
+                made_frames += ok
             else:
                 why = r.get("error") or ("its check failed: " + ", ".join(rep_.failed()) if rep_ is not None else "failed")
                 log(f"   damaged frames: not made again ({why})")
@@ -1724,6 +1728,11 @@ def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn
     shutil.move(str(tmp), str(dst))
     shutil.rmtree(idir, ignore_errors=True)
     rec.interpolated = str(dst)
+    if made_frames and not m:
+        from .report import clip as clip_mod
+        shown = clip_mod.made_again(src, dst, src.parent / "sheets" / f"{dst.stem}_compare.mp4", made_frames)
+        if shown:
+            rec.clips = [c for c in rec.clips if c.get("path") != shown["path"]] + [shown]
     between = made - info["frames"] if m else 0
     parts = []
     if between:
@@ -1859,6 +1868,12 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
                          f"in {shown}")
     # with a pre-pass the "before" frames are the deinterlaced / IVTC'd ones (same frame indices)
     rec.sheets = [str(p) for p in review_frames(base, shown, out_dir / "sheets")]
+    if final.passed:
+        # stills cannot show flicker or a torn frame: a few moments of both, side by side and in step
+        from .report import clip as clip_mod
+        made = clip_mod.before_after(base, shown, out_dir / "sheets" / f"{dst.stem}_compare.mp4")
+        if made:
+            rec.clips.append(made)
     if rec.passed and not config.KEEP_WORK:
         freed = clean_work(work)
         if freed:

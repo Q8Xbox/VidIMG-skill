@@ -126,6 +126,12 @@ def video_page(rec: dict, out: Path) -> Path:
         for a in rec.get("attempts") or [])
     imgs = "".join(f'<img src="{_url(Path(s).relative_to(out.parent).as_posix()) if Path(s).is_relative_to(out.parent) else html.escape(Path(s).as_uri())}" loading="lazy">'
                    for s in rec.get("sheets") or [])
+    def link(s: str) -> str:
+        return _url(Path(s).relative_to(out.parent).as_posix()) if Path(s).is_relative_to(out.parent) else html.escape(Path(s).as_uri())
+
+    clips = "".join(f'<figure><video controls loop muted playsinline preload="metadata" src="{link(c["path"])}"></video>'
+                    f'<figcaption>{html.escape(str(c.get("what") or ""))}</figcaption></figure>'
+                    for c in rec.get("clips") or [] if c.get("path"))
     if rec.get("passed"):
         status = "✅ Passed the guard and delivered"
     elif rec.get("chosen") and not rec.get("final_gates"):
@@ -140,13 +146,15 @@ def video_page(rec: dict, out: Path) -> Path:
 <title>Video Restoration Report</title><style>
 {_STYLE.format()}
 table{{border-collapse:collapse}} th,td{{border-bottom:1px solid var(--line);padding:4px 10px;text-align:left}}
-img{{width:100%;height:auto;border-radius:6px;margin:8px 0}}</style></head>
+img,video{{width:100%;height:auto;border-radius:6px;margin:8px 0}} figure{{margin:0 0 12px}}
+figcaption{{font-size:.9rem;opacity:.8}}</style></head>
 <body><main><h1>Video restoration report: {html.escape(Path(rec.get('source', '')).name)}</h1>
 <section><p><b>{status}</b></p><p>Plan: {html.escape(rec.get('plan') or '')}</p>{pre_html}
 <p>Chosen model: <b>{html.escape(str(rec.get('chosen')))}</b></p>
 {f'<p>Output: {html.escape(rec["delivered"])}</p>' if rec.get('delivered') else ''}
 <ul>{atts}</ul>{f'<ul>{notes}</ul>' if notes else ''}</section>
 {f'<section><h2>Final guard checks</h2><table><tr><th></th><th>Check</th><th>Measured</th><th>Limit</th></tr>{rows}</table></section>' if rows else ''}
+{f'<section><h2>Clips to compare (playing side by side)</h2>{clips}</section>' if clips else ''}
 {f'<section><h2>Frames to compare (before / after)</h2>{imgs}</section>' if imgs else ''}</main></body></html>"""
     out.parent.mkdir(parents=True, exist_ok=True)      # no sheet was made (every photo failed): the folder is not there
     out.write_text(page, encoding="utf-8")
