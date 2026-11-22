@@ -103,6 +103,11 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   - **Every video leaves a case.** After a run its case is written to `<output root>/library/cases/`: the
     measurements, the recipe, what the guard said, the review, the person's verdict. The next survey shows the
     most similar earlier cases beside each new video, and the file's own earlier runs.
+  - **Time estimates from this machine's own runs** (`vidimg/estimate.py`). Every run records how long each stage
+    took (steps, previews, model, texture return and final encode, check, second file) in its case, and the survey
+    gives each pending item an estimate for its recipe as it stands: minutes, a range, the stages, and whether it
+    rests on timed runs or on built-in rates. The earlier per-model figures counted the model only and were about
+    half the truth on whole videos; against five timed runs the new estimates land within about 30 %.
   - **The guard is code and stays code.** Nothing in a recipe or a block can change what counts as faithful.
 - **Clean-up composed per video** (`filters`, on Claude's decision, before the model; `vidimg/cleanup.py`): a
   restorer writes a script for each source, so Claude picks from a small catalogue what the close-ups call for

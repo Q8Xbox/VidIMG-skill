@@ -17,6 +17,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from fractions import Fraction
 from pathlib import Path
@@ -72,6 +73,9 @@ class VideoRecord:
     prepass: dict = field(default_factory=dict)
     recipe: dict = field(default_factory=dict)
     interpolated: str | None = None          # the frame-rate copy with created frames, when asked for
+    timings: dict = field(default_factory=dict)   # seconds per stage (steps, previews, model, finish, check,
+                                                  # second_file): what the next estimate is made from
+    work_done: dict = field(default_factory=dict)  # frames and megapixels the stages worked on
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -1362,7 +1366,10 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
     # every step before the model is its own guarded pass on progressive frames; one that fails leaves the video
     # as it was (only failed field handling stops the run: nothing can be built on woven fields)
     ctx = {"base": src, "shape_ref": src, "work": work, "prof": prof, "rec": rec, "log": log, "drawn": drawn}
-    if not run_steps(ctx, recipe["steps"], blocks):
+    t0 = time.time()
+    done = run_steps(ctx, recipe["steps"], blocks)
+    rec.timings["steps"] = round(time.time() - t0, 1)
+    if not done:
         (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
         return rec
     base, shape_ref = ctx["base"], ctx["shape_ref"]
@@ -1376,6 +1383,7 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
         return add_interpolation(_full_run(src, out_dir, work, base, prof, rec, dict(cands)[rec.chosen], encoder,
                                            on_progress, log, drawn=drawn, shape_ref=shape_ref),
                                  recipe, work, encoder, drawn, log)
+    t0 = time.time()
     starts = _preview_starts(prof)
     clips = []
     for i, s in enumerate(starts):
@@ -1411,6 +1419,7 @@ def _run_recipe(src: Path, out_dir: Path, work: Path, prof: probe.VideoProfile, 
         if att.passed_previews == att.previews:
             chosen = (label, make)
             break
+    rec.timings["previews"] = round(time.time() - t0, 1)
     if not chosen:
         rec.notes.append("no candidate passed the guard on every preview: the original stays the deliverable")
         return rec
@@ -1449,6 +1458,19 @@ def add_interpolation(rec: VideoRecord, recipe: dict, work: Path, encoder: str, 
     m, again = recipe.get("interpolate"), recipe.get("rebuild_ghosts")
     if not (m or again) or not rec.delivered:
         return rec
+    started = time.time()
+    try:
+        return _second_file(rec, recipe, work, encoder, drawn, log)
+    finally:
+        rec.timings["second_file"] = round(time.time() - started, 1)
+        try:
+            (work / "record.json").write_text(json.dumps(rec.to_dict(), indent=1, default=str), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def _second_file(rec: VideoRecord, recipe: dict, work: Path, encoder: str, drawn: bool, log=print) -> VideoRecord:
+    m, again = recipe.get("interpolate"), recipe.get("rebuild_ghosts")
     from . import rebuild as rebuild_mod
     from .guard.video import verify_rebuilt
 
@@ -1586,11 +1608,14 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
                              "normal encode (a little less texture kept)")
     log(f"   full run with {rec.chosen} -> {dst.name}" + (f" (then source texture returned, strength {strength:g})"
                                                          if strength > 0 else ""))
+    t0 = time.time()
     if prof.duration > LONG_VIDEO_SECONDS and not any(isinstance(s, video2x.AnimeSR) for s in make()):
         log(f"   long video ({prof.duration / 60:.0f} min): {len(chunk_plan(prof.duration))} resumable chunks")
         r = run_chunked(base, model_out, chosen[1], model_enc, work, on_progress=on_progress, log=log)
     else:
         r = run_engine(base, model_out, chosen[1](), model_enc, on_progress=on_progress)
+    rec.timings["model"] = round(time.time() - t0, 1)
+    t0 = time.time()
     if not r.ok:
         rec.notes.append(f"full run failed: {r.error}")
         return rec
@@ -1620,7 +1645,17 @@ def _full_run(src: Path, out_dir: Path, work: Path, base: Path, prof: probe.Vide
     aspect = media.fix_aspect(shape_ref or src, dst)
     if aspect:
         rec.notes.append(aspect)
+    rec.timings["finish"] = round(time.time() - t0, 1)
+    t0 = time.time()
     final = verify_video(base, dst, reference_vmaf=None, src_vf=ref_vf, drawn_faces=drawn)
+    rec.timings["check"] = round(time.time() - t0, 1)
+    try:                                                    # what the stages worked on, for the next estimate
+        made, fed = media.probe(dst, exact=True), media.probe(base)
+        rec.work_done = {"frames": made["frames"], "in_megapixels": round(fed["width"] * fed["height"] / 1e6, 4),
+                         "out_megapixels": round(made["width"] * made["height"] / 1e6, 4),
+                         "same_size_anime": any(getattr(st, "same_size", False) for st in make())}
+    except Exception:  # noqa: BLE001  (bookkeeping; never fail a run on it)
+        rec.work_done = {}
     rec.final_gates = {g.name: {"status": g.status, "value": g.value, "threshold": g.threshold} for g in final.gates}
     rec.passed = final.passed
     shown = dst

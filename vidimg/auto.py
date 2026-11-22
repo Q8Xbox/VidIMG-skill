@@ -153,6 +153,7 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
     it = {"id": item_id, "source": str(src), "profile_flags": prof.flags,
           "findings": findings or None, "closeups": str(close) if close else None,
           "proposed_recipe": proposed,
+          "work": {"width": prof.width, "height": prof.height, "frames": prof.frames, "fps": prof.fps},
           "gaps": library.gaps(prof.flags) or None,
           "similar_cases": cases.similar(prof.to_dict(), 3, exclude_source=str(src)) or None,
           "history": cases.history(src) or None,
@@ -366,6 +367,12 @@ def summary(plan: dict) -> dict:
                        findings=it.get("findings"), closeups=it.get("closeups"),
                        proposed_recipe=it.get("proposed_recipe"), similar_cases=it.get("similar_cases"),
                        history=it.get("history"), gaps=it.get("gaps"))
+            if it.get("state") == "pending" and it.get("work"):
+                # for the recipe as it stands now (the decided one, else the proposal); for a series, per episode
+                from . import estimate as estimate_mod
+                now = (it.get("decision") or {}).get("recipe") or it.get("proposed_recipe")
+                if now:
+                    row["estimate"] = estimate_mod.estimate(it["work"], now)
             if it["type"] == "series":
                 row.update(episodes=it.get("episodes"))
         for k in ("result", "error", "report", "delivered", "trials", "review"):
@@ -394,7 +401,9 @@ def _next_step(plan: dict, states: list) -> str | None:
                 "each; an item's `gaps` are defects it was measured to have that no block addresses. When the "
                 "close-ups show a defect with no block (measured or not), write the block from what you know "
                 "about restoring it (add_block), compare the recipe with and without it (try_recipes), and "
-                "record what you saw (note_block). A candidate block is used in a full run only after such a "
+                "record what you saw (note_block). Each item's `estimate` says how long its recipe will take "
+                "(minutes, a range, the stages, and whether it rests on runs timed on this machine): tell the "
+                "person before a long run. A candidate block is used in a full run only after such a "
                 "comparison; a block's `record` is how it did on earlier videos. When "
                 "two or more recipes are plausible (a step or not, which strength, which model) and you cannot "
                 "tell which will look better, compare them first with try_recipes and look at its sheet. Then "
