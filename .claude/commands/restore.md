@@ -6,7 +6,8 @@ Use the restore-media skill and its automatic flow. Restore: $ARGUMENTS
 
 1. `survey_media(paths)` (background job); poll `job_status` until done. Its result lists every item (the photo
    batch, each single video, each numbered series) with a decision already filled in, and `contact_sheets`.
-2. Open every contact sheet image and every video's `closeups` image and look. Read each video's
+2. Open every contact sheet image, every video's `closeups` image and its `scenes.sheet` (the kinds of scene
+   the video is made of) and look. Read each video's
    `similar_cases` and `history`, then compose its `recipe` from the survey's `blocks` (faces drawn or real,
    steps in your order, models, scale, texture); `proposed_recipe` is a starting point. Add a block with
    `add_block` when a visible defect has none. The shorthand keys still work: Judge each `findings` entry on
