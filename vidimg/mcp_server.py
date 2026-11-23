@@ -116,7 +116,7 @@ def decide_plan(plan: str, decisions: dict[str, dict]) -> dict:
     old cartoons as real footage, and you may know better which model fits. plan: the survey's output folder (or its
     plan.json). decisions: {item_id: {...}} with any of
       content 'anime' | 'real' | 'auto'   (changing it re-picks the model from the guide unless you give one)
-      model   esrgan-v3 | cugan | cugan-pro | general-v3 | realesrnet | bsrnet  (goes first; the approved order
+      model   esrgan-v3 | cugan | cugan-pro | janai-sd | janai-hd | general-v3 | realesrnet | bsrnet  (goes first; the approved order
               follows if the guard rejects it), model_strict true only when the person insists on that model
       scale (e.g. 2), texture 0..1 (source texture put back; default 1), mask_tape_noise (only if the person asks),
       preview_only (single videos), deblur (photos item; only if the person asks for blur removal),
@@ -352,7 +352,7 @@ def restore_video(path: str, out_dir: str | None = None, preview_only: bool = Fa
     probe. Decide it by looking at analyze_media's frames_sheet first.
     model: CHOOSE IT YOURSELF from analyze_media's model_guide (signals, each model's measured strengths and
     weaknesses, estimated hours, a suggested pick) and what you see on the frames sheet (drawn or real, realistic
-    drawn faces, painted backgrounds), and tell the person which model and why. One of esrgan-v3, cugan, cugan-pro
+    drawn faces, painted backgrounds), and tell the person which model and why. One of esrgan-v3, cugan, cugan-pro, janai-sd, janai-hd
     (anime/cartoon), general-v3, realesrnet, bsrnet. It goes first; if the guard rejects it on the previews the
     approved order follows, so a wrong guess costs time, never fidelity. The person may name a model instead.
     model_strict: True only when the person insists on that one model: it is then the only candidate, and if the

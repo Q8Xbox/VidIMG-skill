@@ -1,0 +1,20 @@
+{
+ "name": "janai-sd",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "onnx",
+ "needs": [
+  "drawn_faces"
+ ],
+ "what": "AnimeJaNai SD (beta, ONNX): sharp, clean lines while the paint and grain of the background stay; the model that redraws thin lines the most",
+ "when": "old SD cartoons where the other anime models turn painted backgrounds smooth; look at faces and thin lines before keeping it; personal use only (CC BY-NC-SA)",
+ "spec": {
+  "model": "animejanai_sd_v1beta34",
+  "scales": [
+   1,
+   2
+  ],
+  "label": "anime janai-sd"
+ },
+ "version": 1
+}

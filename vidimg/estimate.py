@@ -30,6 +30,8 @@ BUILT_IN = {
     "model:anime esrgan-v3": 26.0,      # 24-31 measured on four whole videos (SD x2, and 1440x1080 at its own size)
     "model:anime cugan": 20.0,          # not timed on a whole video yet; a little slower than anime-v3 on previews
     "model:anime cugan-pro": 20.0,
+    "model:anime janai-sd": 23.0,       # one 8 s SD cut at x2 (2026-11-23): a first figure, replaced by timed runs
+    "model:anime janai-hd": 28.0,       # one 6 s 1440x1080 cut at x2
     "model:free general-v3": 8.0,       # one whole 1080p video at its own size
     "model:free realesrnet": 0.45,      # megapixels READ per second (0.47 fps at 1280x720)
     "model:free bsrnet": 0.45,
@@ -48,6 +50,7 @@ BUILT_IN = {
 FIXED = {"previews": 90.0, "check": 150.0, "rebuild_ghosts": 480.0}      # seconds, largely independent of size
 SLOW_INPUT_MODELS = ("free realesrnet", "free bsrnet")                  # rated by what they read, not what they write
 LABELS = {"esrgan-v3": "anime esrgan-v3", "cugan": "anime cugan", "cugan-pro": "anime cugan-pro",
+          "janai-sd": "anime janai-sd", "janai-hd": "anime janai-hd",
           "general-v3": "free general-v3", "realesrnet": "free realesrnet", "bsrnet": "free bsrnet"}
 SPREAD = 0.3                            # the range given around the estimate
 

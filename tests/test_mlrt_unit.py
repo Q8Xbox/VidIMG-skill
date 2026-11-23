@@ -113,4 +113,74 @@ def test_onnx_export_spec_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     r = mlrt_install.install(log=lambda m: None)
     assert r["ok"] and calls["keys"] == mlrt_install.manifest()["models"]
-    assert all(v["status"] == "converted" for v in r["models"].values())
+    assert all(r["models"][k]["status"] == "converted" for k in mlrt_install.manifest()["models"])
+    assert all(r["models"][k]["status"] == "downloaded" for k in mlrt_install.downloads())   # ONNX-only models: fetched
+
+
+def test_downloaded_models_are_pinned_and_described():
+    """ONNX-only models: a fixed commit, a checksum, their licence, and a block Claude can name."""
+    from vidimg import library
+    blocks = library.load()[0]
+    got = mlrt_install.downloads()
+    assert set(got) == {"animejanai_sd_v1beta34", "animejanai_hd_v3_1_balanced"}
+    for key, d in got.items():
+        assert d["url"].startswith("https://raw.githubusercontent.com/the-database/mpv-AnimeJaNai/")
+        assert "/main/" not in d["url"] and d["url"].endswith(".onnx")           # a commit, not a moving branch
+        assert len(d["sha256"]) == 64 and d["size"] > 0 and d["scale"] == 2 and "NC" in d["license"]
+    for name in ("janai-sd", "janai-hd"):
+        b = blocks[name]
+        assert b.kind == "model" and b.runner == "onnx" and "drawn_faces" in b.needs
+        assert b.spec["model"] in got and b.spec["scales"] == [1, 2] and b.spec["label"] == f"anime {name}"
+        assert name in config.VIDEO_MODEL_CHOICES
+
+
+def test_onnx_only_model_runs_on_mlrt_and_is_fetched_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(mlrt_install, "MODELS", tmp_path)
+    monkeypatch.setattr(mlrt_install, "VS_PY", tmp_path / "py.exe")
+    monkeypatch.setattr(mlrt_install, "PLUGIN", tmp_path / "vsort.dll")
+    monkeypatch.setattr(mlrt_install, "SCRIPT", tmp_path / "vsmlrt.py")
+    monkeypatch.setattr(mlrt_install, "ROOT", tmp_path)
+    (tmp_path / "vsort").mkdir()
+    for p in ("py.exe", "vsort.dll", "vsmlrt.py", "vsort/onnxruntime.dll"):
+        (tmp_path / p).write_text("x")
+    monkeypatch.setattr("shutil.which", lambda name: "ffmpeg")
+    fetched = []
+    monkeypatch.setattr("vidimg.setup._fetch", lambda url, sha, dst, log: (fetched.append(dst.name), dst.write_text("m")))
+    key = "animejanai_sd_v1beta34"
+    assert mlrt_install.available(key)[0]                           # not there yet: it is fetched on first use
+    assert free_sr.video_engine(key, "torch") == ("mlrt", "an ONNX-only model")      # there are no PyTorch weights
+    mlrt_install.ensure(key, log=lambda m: None)
+    mlrt_install.ensure(key, log=lambda m: None)
+    assert fetched == [f"{key}.onnx"]
+    assert not mlrt_install.available("no_such_model")[0]
+
+
+def test_recipe_names_an_onnx_model(monkeypatch):
+    from types import SimpleNamespace
+    from vidimg import library, recipe
+    from vidimg import pipeline_video as pv
+    blocks = library.load()[0]
+    p = SimpleNamespace(width=720, height=480, fps=24.0, frames=1000, duration=41.0, flags=[])
+    rcp, _ = recipe.validate({"faces": "drawn", "models": ["janai-sd"], "scale": 2})
+    why, cands = pv.recipe_candidates(p, rcp, blocks)
+    assert [c[0] for c in cands][:2] == ["anime janai-sd", "anime esrgan-v3"] and "janai-sd first" in why
+    st = cands[0][1]()[0]
+    assert (st.model, st.height, st.engine) == ("animejanai_sd_v1beta34", 960, "mlrt")
+    own, _ = recipe.validate({"faces": "drawn", "models": ["janai-hd"], "scale": 1, "model_strict": True})
+    assert pv.recipe_candidates(p, own, blocks)[1][0][1]()[0].height == 480          # x2 inside, scaled back
+    import pytest
+    with pytest.raises(ValueError, match="anime model"):
+        recipe.validate({"faces": "real", "models": ["janai-sd"]})
+    with pytest.raises(ValueError, match="not x4"):
+        recipe.validate({"faces": "drawn", "models": ["janai-sd"], "scale": 4})
+    # named for the single-video tool: first, and never part of the order that follows another pick
+    _, named = pv.plan_candidates(p, 2, "anime", "janai-sd", strict=False)
+    assert named[0][0] == "anime janai-sd" and "anime janai-hd" not in [c[0] for c in named]
+    assert not [c for c in pv.plan_candidates(p, 2, "anime")[1] if "janai" in c[0]]
+
+
+def test_half_float_model_spec(tmp_path, monkeypatch):
+    """A file that works in half floats is given half-float frames and is not converted again."""
+    from pathlib import Path
+    src = Path(mlrt_runner.__file__).read_text(encoding="utf-8")
+    assert "vs.RGBH if half else vs.RGBS" in src and "and not half" in src and "astype(np.float32" in src

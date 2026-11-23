@@ -1,0 +1,20 @@
+{
+ "name": "janai-hd",
+ "kind": "model",
+ "engine": "builtin",
+ "runner": "onnx",
+ "needs": [
+  "drawn_faces"
+ ],
+ "what": "AnimeJaNai HD V3.1 (ONNX): stays closest to the source; clean lines, no invented edges",
+ "when": "HD cartoons and anime; on SD sources it changes almost nothing; personal use only (CC BY-NC-SA)",
+ "spec": {
+  "model": "animejanai_hd_v3_1_balanced",
+  "scales": [
+   1,
+   2
+  ],
+  "label": "anime janai-hd"
+ },
+ "version": 1
+}

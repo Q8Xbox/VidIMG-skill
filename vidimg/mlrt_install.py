@@ -40,6 +40,19 @@ def onnx_path(key: str) -> Path:
     return MODELS / f"{key}.onnx"
 
 
+def downloads() -> dict:
+    """Models that exist as ONNX only: {key: {url, sha256, size, scale, half, license}} (see the manifest)."""
+    return manifest().get("downloads") or {}
+
+
+def ensure(key: str, log=print) -> None:
+    """A downloaded model is fetched the first time it is used (a few MB, checked against its pinned SHA-256)."""
+    d = downloads().get(key)
+    if d and not onnx_path(key).exists():
+        from .setup import _fetch
+        _fetch(d["url"], d["sha256"], onnx_path(key), log)
+
+
 def available(model: str | None = None) -> tuple[bool, str]:
     """Can the vs-mlrt engine run (this model)? (ok, reason)."""
     if not VS_PY.exists():
@@ -47,6 +60,8 @@ def available(model: str | None = None) -> tuple[bool, str]:
     if not (PLUGIN.exists() and SCRIPT.exists() and (ROOT / "vsort" / "onnxruntime.dll").exists()):
         return False, "vs-mlrt missing: run python -m vidimg.mlrt_install"
     if model is not None and not onnx_path(model).exists():
+        if model in downloads():
+            return True, "ok (the model file is downloaded on first use)"
         return False, f"no ONNX file for {model}: run python -m vidimg.mlrt_install"
     if not shutil.which("ffmpeg"):
         return False, "no ffmpeg on PATH"
@@ -114,6 +129,12 @@ def install(log=print) -> dict:
                         report["errors"].append(f"{d['key']}: {d.get('error')}")
             if r.returncode != 0:
                 report["errors"].append(f"ONNX export exited {r.returncode}: {r.stderr.strip()[-300:]}")
+    for key, d in downloads().items():
+        try:
+            ensure(key, log)
+            report["models"][key] = {"onnx": onnx_path(key).name, "status": "downloaded", "license": d.get("license")}
+        except Exception as e:  # noqa: BLE001  (optional models: the rest of the engine still works)
+            report.setdefault("warnings", []).append(f"{key}: {e}")
     report["probe"] = probe()
     report["ok"] = not report["errors"] and bool(report["probe"].get("ok"))
     return report

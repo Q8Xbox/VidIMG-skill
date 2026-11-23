@@ -110,7 +110,8 @@ DirectML on AMD or Intel GPUs) unless the person asks.
    deciding; choose only among recipes the guard passed. The analysis
    often reads old cartoons as real footage, so confirm `content` for every video and series item, and change the
    model when what you see calls for it (the item's `guide` gives the pick for either reading; realistic drawn
-   faces: `cugan-pro`). Add a short `reason`; it appears in the report. You decide; do not ask the person to choose.
+   faces: `cugan-pro`; painted backgrounds that the usual models turn smooth: try `janai-sd` beside them, on HD
+   sources `janai-hd`, both new and for personal use only). Add a short `reason`; it appears in the report. You decide; do not ask the person to choose.
    Ask them only about opt-in steps they did not mention and the survey shows are relevant: `deblur` when photos
    are soft, `mask_tape_noise` when `tape_advice` reports head-switching noise.
 3. Tell the person in a few lines what was found and what you decided and why, then `run_plan(plan)` (background

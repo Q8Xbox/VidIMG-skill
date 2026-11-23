@@ -59,6 +59,8 @@ def video_engine(model: str, preference: str | None = None) -> tuple[str | None,
     if pref not in ENGINE_CHOICES:
         return None, f"unknown engine {pref!r}; choose one of {', '.join(ENGINE_CHOICES)}"
     m_ok, m_why = mlrt_install.available(model)
+    if model in mlrt_install.downloads():                   # exists as ONNX only: no PyTorch weights to fall back to
+        return ("mlrt", "an ONNX-only model") if m_ok else (None, m_why)
     if pref == "mlrt":
         return ("mlrt", "requested") if m_ok else (None, m_why)
     t_ok = PYTHON.exists() and model_file(model).exists()
@@ -199,13 +201,20 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
     colour = colour if colour is not None else (media.colour_hint(src) or
                                                 {k: info.get(k) for k in ("color_primaries", "color_transfer") if info.get(k)})
     full = colour.get("color_range") in ("pc", "jpeg") or str(info.get("pix_fmt", "")).startswith("yuvj")
-    heavy = not manifest()[st.model]["training"].endswith("compact")
+    from .. import mlrt_install
+    fetched = mlrt_install.downloads().get(st.model)
+    heavy = not fetched and not manifest()[st.model]["training"].endswith("compact")
     if engine == "mlrt":
-        from .. import mlrt_install
         from . import vapoursynth as _vs
+        if fetched:
+            try:
+                mlrt_install.ensure(st.model, log=lambda m: None)
+            except Exception as e:  # noqa: BLE001
+                return AdapterResult(False, error=f"{st.model} could not be downloaded: {e}")
         spec = {"onnx": str(mlrt_install.onnx_path(st.model)), "width": w, "height": h, "out_width": ow,
                 "out_height": oh, "frames": expected or info["frames"], "plugins": str(_vs.PLUGINS),
                 "vsmlrt_dir": str(mlrt_install.ROOT), "backend": "dml", "fp16": True, "streams": 1,
+                "half": bool(fetched and fetched.get("half")),
                 # whole SD frames fit (tested 720x576 x4); larger heavy-model frames run in tiles
                 "tile": 512 if heavy and w * h > 450_000 else 0}
         worker_cmd = [str(mlrt_install.VS_PY), "-I", str(MLRT_RUNNER)]
