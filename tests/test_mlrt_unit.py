@@ -184,3 +184,18 @@ def test_half_float_model_spec(tmp_path, monkeypatch):
     from pathlib import Path
     src = Path(mlrt_runner.__file__).read_text(encoding="utf-8")
     assert "vs.RGBH if half else vs.RGBS" in src and "and not half" in src and "astype(np.float32" in src
+
+
+def test_closed_output_pipe_is_not_a_crash():
+    """A chunk's encoder stops reading once its frames are in: the worker ends quietly instead of failing the run
+    (owner episode, 2026-11-23: every chunk of a full run on this engine failed with BrokenPipeError)."""
+    class Closed:
+        def write(self, data):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            raise OSError(22, "Invalid argument")
+
+    assert mlrt_runner.write_frame(Closed(), b"x") is False and mlrt_runner.write_frame(Closed(), b"") is False
+    out = io.BytesIO()
+    assert mlrt_runner.write_frame(out, b"abc") and mlrt_runner.write_frame(out, b"") and out.getvalue() == b"abc"
