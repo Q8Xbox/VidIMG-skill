@@ -26,6 +26,16 @@ still loses nothing when six frames are made from its two ends, and on the owner
 four and five torn frames. In a moving scene, and beyond RUN_STILL frames, what lies between two distant frames
 would be guessed, not rebuilt: such runs are not found.
 
+A second hint, "tape": the frame reads like analog tape damage. ffmpeg's signalstats counts the pixels that do
+not fit their surroundings (TOUT, "temporal outliers", a measure taken from tape archiving), and torn or
+dropped-out frames carry many of them. A candidate is marked when its count is above TAPE_LEVEL AND at least
+TAPE_RATIO times the median of the frames around it. Measured on three owner cartoons (2026-11-23), against a
+look at every candidate: on the one with tape damage 21 of 83 candidates were marked, 20 of them torn (of 22
+torn, the two missed sit where the frames around them read high too); on two without tape damage, 3 of 113 and
+8 of 58. Neither condition works alone: the plain count marked 39 of those 58. The reading for repeated lines
+(VREP), which is meant for dropouts, read zero on the torn frames. It is a hint for where to look first; the
+frames to make again are still named by whoever looked.
+
 One reading is a hint for the look, not a verdict: "flash" when the frame itself is nearly one flat tone. A
 storm scene of an owner cartoon had 31 of these, white and black, between identical neighbours (2026-11-22):
 lightning, drawn on purpose; making them again would remove it. Everything else is "other": torn and dropped-out
@@ -55,6 +65,9 @@ RUN_STILL = 6                   # ... and where the frames either side of the ru
 STILL_CELLS = 0.3               # share of cells that may differ by more than CELL_OUT between those two frames.
                                 # Measured on the owner cartoon, a talking scene, sound frames 4 to 7 apart:
                                 # 10-25 %. A pan or a cut changes most of the frame
+TAPE_LEVEL = 0.001              # share of outlier pixels (signalstats TOUT) from which a frame may be tape-damaged ...
+TAPE_RATIO = 1.5                # ... when that is also this many times the median of the frames around it
+TAPE_WINDOW = 12                # frames on each side that make up "around it" (the nearest two are left out)
 MAX_LISTED = 200                # candidates kept (the largest first); more than this is not a few damaged frames
 
 
@@ -155,6 +168,48 @@ class Finder:
         kept = sorted(sorted(rows, key=lambda r: -r["share"])[:MAX_LISTED], key=lambda r: r["frame"])
         runs = sorted(sorted(self.runs, key=lambda r: -r["share"])[:MAX_LISTED], key=lambda r: r["first"])
         return Damage(frames=self.n, found=kept, total=len(rows), runs=runs)
+
+
+def outliers(src: Path) -> np.ndarray | None:
+    """signalstats' TOUT for every frame of the video, in stored order. None when it cannot be read."""
+    import re
+    import subprocess
+
+    try:
+        cp = subprocess.run([media.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-i", str(src), "-map", "0:v:0",
+                             "-vf", "signalstats=stat=tout,metadata=print:key=lavfi.signalstats.TOUT:file=-",
+                             "-fps_mode", "passthrough", "-an", "-f", "null", "-"],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+                            timeout=7200)
+    except Exception:  # noqa: BLE001  (a hint; the candidates are listed without it)
+        return None
+    values = re.findall(r"lavfi\.signalstats\.TOUT=([0-9.eE+-]+)", cp.stdout or "")
+    return np.array([float(v) for v in values], np.float64) if values else None
+
+
+def tape_like(tout: np.ndarray, frame: int, skip: tuple[int, int] | None = None) -> bool:
+    """Does this frame read like tape damage (see the module text)? skip: (first, last) of a run the frame is
+    part of; those frames do not count as "the frames around it"."""
+    if tout is None or not 0 <= frame < len(tout) or tout[frame] <= TAPE_LEVEL:
+        return False
+    a, z = skip if skip else (frame, frame)
+    near = [k for k in range(max(0, a - TAPE_WINDOW), min(len(tout), z + TAPE_WINDOW + 1)) if k < a - 2 or k > z + 2]
+    if not near:
+        return False
+    return bool(tout[frame] >= TAPE_RATIO * max(1e-6, float(np.median(tout[near]))))
+
+
+def mark_tape(found: Damage, tout: np.ndarray | None) -> Damage:
+    """Adds "tape": true/false to every candidate and every run (a run when at least half of its frames read
+    like tape damage). Without readings for exactly this video's frames nothing is marked."""
+    if tout is None or len(tout) != found.frames:
+        return found
+    for d in found.found:
+        d["tape"] = tape_like(tout, d["frame"])
+    for r in found.runs:
+        hits = sum(tape_like(tout, i, (r["first"], r["last"])) for i in range(r["first"], r["last"] + 1))
+        r["tape"] = hits * 2 >= r["last"] - r["first"] + 1
+    return found
 
 
 def find(frames) -> Damage:

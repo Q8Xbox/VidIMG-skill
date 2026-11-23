@@ -118,7 +118,7 @@ def test_the_survey_lists_the_lone_candidates_largest_first_and_keeps_flashes_ap
     assert out["runs"] == [[30, 31]] and seen["runs"] == got.runs
     assert out["sheet"].endswith("v1_damaged.jpg") and "1 candidate damaged frames" in seen["title"]
     assert json.loads(Path(out["list"]).read_text(encoding="utf-8"))["lone"] == [10, 20]
-    assert "1 candidate damaged frames, 1 runs of two to six, 1 one-tone flashes, 0 in a flicker" in said[-1]
+    assert "1 candidate damaged frames (0 read like tape damage), 1 runs of two to six (0), 1 one-tone flashes, 0 in a flicker" in said[-1]
     only_runs = damage.Damage(frames=40, runs=got.runs)
     assert auto._damaged("v3", Path("C:/in/clip.mkv"), tmp_path, only_runs, said.append)["runs"] == [[30, 31]]
     assert auto._damaged("v2", Path("C:/in/clip.mkv"), tmp_path, damage.Damage(frames=9), said.append) is None
@@ -375,3 +375,104 @@ def test_a_long_run_needs_two_ends_that_show_the_same_picture():
     assert ok and 0 < share < 0.2
     ok, share = rebuild.still_enough(a, _picture(2))
     assert not ok and share > 0.6
+
+
+# ----------------------------------------------------------------------------- the hint: reads like tape damage
+def _readings(n: int = 200, level: float = 0.0004) -> np.ndarray:
+    return np.full(n, level, np.float64)
+
+
+def test_a_frame_reads_like_tape_damage_when_it_is_high_and_stands_out_from_the_frames_around_it():
+    t = _readings()
+    t[50] = 0.0030                                                       # high, and alone
+    assert damage.tape_like(t, 50) and not damage.tape_like(t, 51)
+    t[100] = 0.0009                                                      # stands out, but under the level
+    assert not damage.tape_like(t, 100)
+    busy = _readings(level=0.0040)                                       # a busy scene: every frame reads high
+    busy[60] = 0.0050
+    assert not damage.tape_like(busy, 60)                                # high, but like the frames around it
+    assert not damage.tape_like(t, 999) and not damage.tape_like(None, 5)
+    # frames of a run do not count as "the frames around it"
+    run = _readings()
+    run[80:84] = 0.0030
+    assert all(damage.tape_like(run, i, (80, 83)) for i in range(80, 84))
+    edge = _readings(3)
+    edge[1] = 0.01
+    assert not damage.tape_like(edge, 1)                                 # nothing far enough away to compare with
+
+
+def test_candidates_and_runs_are_marked_only_with_readings_for_exactly_this_video():
+    got = damage.find(iter(_clip()))
+    t = _readings(40)
+    t[10] = 0.0030                                                       # the torn frame
+    t[30:32] = 0.0030                                                    # the torn run
+    damage.mark_tape(got, t)
+    by = {d["frame"]: d for d in got.found}
+    assert by[10]["tape"] is True and by[20]["tape"] is False            # the flash is not tape damage
+    assert got.runs[0]["tape"] is True
+    fresh = damage.find(iter(_clip()))
+    assert "tape" not in damage.mark_tape(fresh, _readings(39)).found[0]  # a reading short: nothing is marked
+    assert "tape" not in damage.mark_tape(fresh, None).found[0]
+
+
+def test_the_readings_come_from_one_ffmpeg_pass(monkeypatch):
+    seen = {}
+
+    def run(args, **kw):
+        seen["args"] = args
+        return SimpleNamespace(stdout="frame:0 pts:0\nlavfi.signalstats.TOUT=0.000412\nframe:1 pts:1\n"
+                                      "lavfi.signalstats.TOUT=0.003\nlavfi.signalstats.TOUT=1e-05\n", returncode=0)
+
+    monkeypatch.setattr(damage.media, "ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr("subprocess.run", run)
+    got = damage.outliers(Path("x.mkv"))
+    assert list(got) == [0.000412, 0.003, 1e-05]
+    graph = seen["args"][seen["args"].index("-vf") + 1]
+    assert "signalstats=stat=tout" in graph and "file=-" in graph and "passthrough" in seen["args"]
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: SimpleNamespace(stdout="", returncode=1))
+    assert damage.outliers(Path("x.mkv")) is None
+
+    def broken(args, **kw):
+        raise OSError("no ffmpeg")
+
+    monkeypatch.setattr("subprocess.run", broken)
+    assert damage.outliers(Path("x.mkv")) is None
+
+
+def test_the_survey_lists_and_shows_tape_like_candidates_first(monkeypatch, tmp_path):
+    a = _picture(1)
+    seq = [a.copy() for _ in range(60)]
+    seq[10] = _torn(a)
+    small = a.copy()
+    small[60:230, 40:320] = 255 - small[60:230, 40:320]                  # a larger change, drawn on purpose
+    seq[40] = small
+    got = damage.find(iter(seq))
+    assert [d["frame"] for d in sorted(got.found, key=lambda d: -d["share"])] == [40, 10]
+    t = _readings(60)
+    t[10] = 0.0030
+    monkeypatch.setattr(damage, "outliers", lambda src: t)
+    seen = {}
+    monkeypatch.setattr(closeups, "damage_sheet", lambda src, dst, found, title="", runs=None: seen.update(found=found) or Path(dst))
+    said = []
+    out = auto._damaged("v1", Path("C:/in/clip.mkv"), tmp_path, got, said.append)
+    assert out["frames"] == [10, 40] and out["tape_like"] == [10] and out["tape_like_runs"] == []
+    assert "2 candidate damaged frames (1 read like tape damage)" in said[-1]
+    assert {d["frame"]: d["tape"] for d in seen["found"]} == {10: True, 40: False}
+    # without readings the order is by size, as before
+    monkeypatch.setattr(damage, "outliers", lambda src: None)
+    plain = auto._damaged("v2", Path("C:/in/clip.mkv"), tmp_path, damage.find(iter(seq)), said.append)
+    assert plain["frames"] == [40, 10] and plain["tape_like"] == []
+
+
+def test_the_sheet_puts_tape_like_candidates_first_and_says_so(monkeypatch, tmp_path):
+    asked = {}
+
+    def numbered(src, numbers):
+        asked["n"] = list(numbers)
+        return {n: cv2.cvtColor(_picture(n % 7), cv2.COLOR_GRAY2BGR) for n in numbers}
+
+    monkeypatch.setattr(closeups, "frames_numbered", numbered)
+    monkeypatch.setattr(closeups, "DAMAGE_SHOWN", 1)                     # room for one: it must be the tape-like one
+    found = [{"frame": 40, "share": 0.9, "looks": "other", "lone": True, "tape": False},
+             {"frame": 10, "share": 0.2, "looks": "other", "lone": True, "tape": True}]
+    assert closeups.damage_sheet(Path("x.mkv"), tmp_path / "d.jpg", found) and asked["n"] == [9, 10, 11]

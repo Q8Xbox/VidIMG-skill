@@ -229,8 +229,10 @@ def damage_sheet(src: Path, dst: Path, found: list[dict], *, title: str = "", ru
     row between two frames that agree). Damage, or frames drawn that way (a flash, lightning, an impact frame)?
     Only a look can say; the measurement cannot."""
     src, dst = Path(src), Path(dst)
-    shown = sorted((d for d in found if d.get("lone")), key=lambda d: (d.get("looks") == "flash", -d["share"]))[:DAMAGE_SHOWN]
-    long = sorted(runs or [], key=lambda r: -r["share"])[:RUNS_SHOWN]
+    # the ones that read like tape damage first (probe.damage, "tape"): those are most likely worth the look
+    shown = sorted((d for d in found if d.get("lone")),
+                   key=lambda d: (d.get("looks") == "flash", not d.get("tape"), -d["share"]))[:DAMAGE_SHOWN]
+    long = sorted(runs or [], key=lambda r: (not r.get("tape"), -r["share"]))[:RUNS_SHOWN]
     frames = frames_numbered(src, [d["frame"] + k for d in shown for k in (-1, 0, 1)]
                              + [n for r in long for n in range(r["first"] - 1, r["last"] + 2)])
     width = CELL[0] * ZOOM * 3
@@ -248,7 +250,8 @@ def damage_sheet(src: Path, dst: Path, found: list[dict], *, title: str = "", ru
             inside = r["first"] <= n <= r["last"]
             cells.append(_label(small, f"frame {n}" + (" RUN?" if inside else ""), (0, 255, 255) if inside else (255, 255, 255)))
         head = np.full((26, width, 3), 30, np.uint8)
-        cv2.putText(head, f"frames {r['first']}-{r['last']} in a row, between two frames that agree ({r['share']:.0%} stands out)",
+        cv2.putText(head, f"frames {r['first']}-{r['last']} in a row, between two frames that agree ({r['share']:.0%} stands out)"
+                          + (" - reads like TAPE damage" if r.get("tape") else ""),
                     (6, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         rows += [head, _row(cells, width)]
     for d in sorted(shown, key=lambda d: d["frame"]):
@@ -260,7 +263,7 @@ def damage_sheet(src: Path, dst: Path, found: list[dict], *, title: str = "", ru
             f = frames[i + k]
             small = cv2.resize(f, (cw, round(f.shape[0] * cw / f.shape[1])), interpolation=cv2.INTER_AREA)
             label = (f"frame {i}: {d['share']:.0%} of it stands out" + (" (one flat tone: a flash?)" if d.get("looks") == "flash" else "")
-                     if k == 0 else f"frame {i + k}")
+                     + (" - reads like TAPE damage" if d.get("tape") else "") if k == 0 else f"frame {i + k}")
             cells.append(_label(small, label, (0, 255, 255) if k == 0 else (255, 255, 255)))
         rows.append(_row(cells, width))
     if not rows:

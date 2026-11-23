@@ -152,7 +152,11 @@ def _video_item(item_id: str, src: Path, out: Path, log) -> dict:
                                  f"(candidates: {', '.join(map(str, damaged['frames'][:12]))}"
                                  + (", ..." if damaged["count"] > 12 else "") + ")"
                                  + (f", and {len(damaged['runs'])} runs of two to six frames stand out together"
-                                    if damaged.get("runs") else "") + "; a model sharpens real damage",
+                                    if damaged.get("runs") else "")
+                                 + (f"; {len(damaged.get('tape_like') or [])} frames and "
+                                    f"{len(damaged.get('tape_like_runs') or [])} runs read like tape damage and are "
+                                    "listed and shown first" if damaged.get("tape_like") or damaged.get("tape_like_runs")
+                                    else "") + "; a model sharpens real damage",
                          "decision": "recipe: rebuild_damaged: [frame numbers] (created frames, in a second file; only "
                                      "the frames you judged to be damage, and only when the person wants them made again)",
                          "look": "damaged.sheet: tape tearing, dropouts or broken blocks, or a frame drawn that way "
@@ -220,20 +224,25 @@ DAMAGED_LISTED = 60             # candidate frame numbers carried in the plan (a
 def _damaged(item_id: str, src: Path, out: Path, got, log) -> dict | None:
     """Candidate damaged frames for the plan: the lone ones that are not flashes, largest first, and a sheet."""
     try:
+        from .probe import damage
         from .report import closeups
         lone = [d for d in got.found if d["lone"]]
-        flashes = [d for d in lone if d["looks"] == "flash"]
-        cands = sorted((d for d in lone if d["looks"] != "flash"), key=lambda d: -d["share"])
-        runs = sorted(got.runs, key=lambda r: -r["share"])
-        if not lone and not runs:
+        if not lone and not got.runs:
             return None
+        damage.mark_tape(got, damage.outliers(src))             # which of them read like tape damage: looked at first
+        flashes = [d for d in lone if d["looks"] == "flash"]
+        cands = sorted((d for d in lone if d["looks"] != "flash"), key=lambda d: (not d.get("tape"), -d["share"]))
+        runs = sorted(got.runs, key=lambda r: (not r.get("tape"), -r["share"]))
+        tape = [d["frame"] for d in cands if d.get("tape")]
+        tape_runs = [[r["first"], r["last"]] for r in runs if r.get("tape")]
         where = out / "survey" / f"{item_id}_damaged.json"
         statefile.write_json(where, got.to_dict())
         sheet = closeups.damage_sheet(src, out / "survey" / f"{item_id}_damaged.jpg", got.found, runs=got.runs,
                                       title=f"{item_id}  {src.name}: {len(cands)} candidate damaged frames, {len(runs)} runs")
-        log(f"   {item_id}: {len(cands)} candidate damaged frames, {len(runs)} runs of two to six, "
-            f"{len(flashes)} one-tone flashes, {got.total - len(lone)} in a flicker")
+        log(f"   {item_id}: {len(cands)} candidate damaged frames ({len(tape)} read like tape damage), {len(runs)} runs "
+            f"of two to six ({len(tape_runs)}), {len(flashes)} one-tone flashes, {got.total - len(lone)} in a flicker")
         return {"count": len(cands), "frames": [d["frame"] for d in cands[:DAMAGED_LISTED]], "flashes": len(flashes),
+                "tape_like": tape[:DAMAGED_LISTED], "tape_like_runs": tape_runs[:DAMAGED_LISTED],
                 "runs": [[r["first"], r["last"]] for r in runs[:DAMAGED_LISTED]],
                 "in_runs": got.total - len(lone), "list": str(where), "sheet": str(sheet) if sheet else None}
     except Exception as e:  # noqa: BLE001
@@ -481,7 +490,10 @@ def _next_step(plan: dict, states: list) -> str | None:
                 "frame; it can only be made again from its neighbours, which is a created frame. Tell the "
                 "person what you found, and ONLY if they want such frames made again name the ones you judged "
                 "to be damage in the recipe's `rebuild_damaged`: [frame numbers]; they are then made again in "
-                "a second file and the faithful file keeps them as they are. `damaged.runs` are two to six "
+                "a second file and the faithful file keeps them as they are. `damaged.tape_like` and tape_like_runs are the candidates that also read "
+                "like analog tape damage (a hint that was right for 20 of 21 on a torn cartoon, and wrong for a "
+                "few drawn frames on clean ones): look at those first, and still judge every frame you name. "
+                "`damaged.runs` are two to six "
                 "frames in a row that stand out together (more than three only where the scene holds still): to have such a run made again, name every frame "
                 "of it. Check each neighbour on the sheet as well: a frame is made from the frames either "
                 "side of it, so when a neighbour is damaged too, name it with the frame (a run), or leave "
