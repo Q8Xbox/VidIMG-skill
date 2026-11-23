@@ -34,6 +34,21 @@ def area_shrink(a: np.ndarray, ow: int, oh: int) -> np.ndarray | None:
     return a if k == 1 else a.reshape(oh, k, ow, k, a.shape[2]).mean(axis=(1, 3))
 
 
+CLOSED = "output pipe closed before the last frame: the encoder stopped"
+
+
+def write_frame(stream, data: bytes) -> bool:
+    """Write one frame (or, with no data, flush). False when the reader has closed the pipe."""
+    try:
+        if data:
+            stream.write(data)
+        else:
+            stream.flush()
+        return True
+    except OSError:                 # BrokenPipeError, or EINVAL from a closed pipe on Windows
+        return False
+
+
 class PipeFrames:
     """Sequential stdin reader shared by VapourSynth's frame requests (which may arrive out of order)."""
 
@@ -107,9 +122,15 @@ def main(spec: dict) -> None:
         a = np.stack([np.asarray(f[p]) for p in range(3)], axis=-1).astype(np.float32, copy=False)
         if box:
             a = area_shrink(a, ow, oh)
-        wr.write((np.clip(a, 0, 1) * 65535 + 0.5).astype("<u2").tobytes())
+        if not write_frame(wr, (np.clip(a, 0, 1) * 65535 + 0.5).astype("<u2").tobytes()):
+            # not an error by itself: a chunk's encoder stops reading once its frames are in. Whether the run
+            # worked is judged by the encoder's exit code and the frame count, in the caller (as in sr_runner)
+            sys.stderr.write(CLOSED + "\n")
+            return
         n_out += 1
-    wr.flush()
+    if not write_frame(wr, b""):
+        sys.stderr.write(CLOSED + "\n")
+        return
     sys.stderr.write(json.dumps({"frames": n_out, "native_scale": k, "resize": "area" if box else "spline36"}) + "\n")
 
 
