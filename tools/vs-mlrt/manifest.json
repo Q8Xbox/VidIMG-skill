@@ -15,6 +15,35 @@
    "sha256": "d07dae0a00cb8dbf4f00358f640f630ff5d933de44d27050e7acce4f31cc3560"
   }
  },
- "pip_pins_sr_venv": ["onnx==1.23.2", "onnxscript==0.7.2", "onnxruntime-directml==1.24.4"],
- "models": ["realesrnet_x4", "bsrnet_x4", "general_x4v3"]
+ "pip_pins_sr_venv": [
+  "onnx==1.23.2",
+  "onnxscript==0.7.2",
+  "onnxruntime-directml==1.24.4"
+ ],
+ "models": [
+  "realesrnet_x4",
+  "bsrnet_x4",
+  "general_x4v3"
+ ],
+ "downloads_comment": "Models that exist as ONNX only and are downloaded as they are, SHA-256 pinned, from a fixed commit of their project. half: the file takes and returns half-float frames. Their licence is not VidIMG's: CC BY-NC-SA 4.0 means personal, non-commercial use; the files are fetched to the user's machine and never shipped with VidIMG.",
+ "downloads": {
+  "animejanai_sd_v1beta34": {
+   "url": "https://raw.githubusercontent.com/the-database/mpv-AnimeJaNai/602438999ebde8e10ae1364881678bd4980957d4/BuildMpvUpscale2xAnimeJaNai/mpv-upscale-2x_animejanai/animejanai/onnx/2x_AnimeJaNai_SD_V1beta34_Compact_1x3xHxW_dyn-HW_strong_fp16_op21_dynamo.onnx",
+   "size": 1212903,
+   "sha256": "ded46591ddfaeb22b3daaf84ad7b36838335aa3efca66acfa36177ce4ab21eb5",
+   "scale": 2,
+   "half": true,
+   "project": "the-database/mpv-AnimeJaNai",
+   "license": "CC BY-NC-SA 4.0 (non-commercial)"
+  },
+  "animejanai_hd_v3_1_balanced": {
+   "url": "https://raw.githubusercontent.com/the-database/mpv-AnimeJaNai/602438999ebde8e10ae1364881678bd4980957d4/BuildMpvUpscale2xAnimeJaNai/mpv-upscale-2x_animejanai/animejanai/onnx/2x_AnimeJaNai_HD_V3.1_Balanced_SPANF3_b8f64_unshuffle_fp16.onnx",
+   "size": 1971970,
+   "sha256": "b308e93c3dda3c4f9f968295b2b7b8d1c0583a711bca53a08d51134d9d1cbd5c",
+   "scale": 2,
+   "half": true,
+   "project": "the-database/mpv-AnimeJaNai",
+   "license": "CC BY-NC-SA 4.0 (non-commercial)"
+  }
+ }
 }

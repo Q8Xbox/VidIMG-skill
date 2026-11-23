@@ -47,7 +47,8 @@ def test_a_preferred_model_that_does_not_fit_falls_back_to_the_approved_order():
 def test_guide_suggestions_follow_the_measurements():
     g = pv.model_guide(_profile(), 2, "anime")
     assert g["suggested"] == "esrgan-v3"
-    assert {m["model"] for m in g["models"] if m["applies"]} == {"esrgan-v3", "cugan", "cugan-pro", "general-v3"}
+    assert {m["model"] for m in g["models"] if m["applies"]} == {"esrgan-v3", "cugan", "cugan-pro", "janai-sd", "janai-hd",
+                                                                 "general-v3"}
     g = pv.model_guide(_profile(faces_max=2, face_min_height=60), 2, "anime")
     assert any("cugan-pro" in r for r in g["why"])                         # realistic drawn faces: check the sheet
     g = pv.model_guide(_profile(faces_max=1, face_min_height=80), None, "real")

@@ -11,7 +11,8 @@ box (area) average for an integer shrink like the PyTorch path, Spline36 otherwi
 
     tools/vs-venv/Scripts/python -I vidimg/mlrt_runner.py spec.json
 spec: {"onnx", "width", "height", "out_width", "out_height", "frames", "plugins", "vsmlrt_dir",
-       "backend": "dml"|"cpu", "fp16": bool, "tile": int|0, "streams": int}
+       "backend": "dml"|"cpu", "fp16": bool, "tile": int|0, "streams": int,
+       "half": bool}   half: the ONNX file itself takes and returns half-float frames (it is not converted)
 """
 
 from __future__ import annotations
@@ -84,11 +85,12 @@ def main(spec: dict) -> None:
         return out
 
     src = core.std.ModifyFrame(blank, blank, fill)
-    rgb = core.resize.Point(src, format=vs.RGBS)
+    half = bool(spec.get("half"))
+    rgb = core.resize.Point(src, format=vs.RGBH if half else vs.RGBS)
     if spec.get("backend", "dml") == "cpu":
         be = vsmlrt.Backend.ORT_CPU(num_streams=int(spec.get("streams", 1)))
     else:
-        be = vsmlrt.Backend.ORT_DML(fp16=bool(spec.get("fp16", True)), num_streams=int(spec.get("streams", 1)))
+        be = vsmlrt.Backend.ORT_DML(fp16=bool(spec.get("fp16", True)) and not half, num_streams=int(spec.get("streams", 1)))
     tile = int(spec.get("tile") or 0)
     kw = {"tilesize": (tile, tile), "overlap": (16, 16)} if tile and (w > tile or h > tile) else {}
     up = vsmlrt.inference(rgb, spec["onnx"], backend=be, **kw)
@@ -101,7 +103,8 @@ def main(spec: dict) -> None:
     for n, f in enumerate(up.frames(prefetch=4, backlog=8)):
         if not pipe.real(n):
             break
-        a = np.stack([np.asarray(f[p]) for p in range(3)], axis=-1)
+        # float32 before the 16-bit write: a half-float cannot hold 65535 (it overflows to infinity)
+        a = np.stack([np.asarray(f[p]) for p in range(3)], axis=-1).astype(np.float32, copy=False)
         if box:
             a = area_shrink(a, ow, oh)
         wr.write((np.clip(a, 0, 1) * 65535 + 0.5).astype("<u2").tobytes())

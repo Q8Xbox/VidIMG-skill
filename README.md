@@ -79,6 +79,10 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
     a scene in fast movement are mixes of two pictures the file holds nowhere else: no neighbour can stand in
     for them, so the faithful file keeps them. On request (`rebuild_ghosts`) they are made again from their two
     neighbours by RIFE, in the second file only, with the count in the record.
+  - **AnimeJaNai models.** Two more anime models Claude can name in a recipe: `janai-sd` for old SD cartoons
+    (sharp lines, painted backgrounds kept) and `janai-hd` for HD sources. They run on the vs-mlrt engine and are
+    downloaded on first use from their project (3 MB, checksum pinned). Their licence is CC BY-NC-SA 4.0:
+    personal, non-commercial use.
   - **Comparison clips.** Every delivered video gets a short clip of a few moments with the source and the
     result playing side by side and in step, and a second file with frames made again gets one that plays those
     places four times slower. Stills cannot show flicker, ghosts or a torn frame. The clips are in the report.

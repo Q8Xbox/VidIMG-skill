@@ -146,11 +146,21 @@ def plan_candidates(p: probe.VideoProfile, scale: float | None = None, content: 
         if strict:
             return f"{why}; requested model {model} does not apply to this content", []
         return f"{why}; chosen model {model} does not apply to this content: approved order instead", \
-            [c for c in cands if c[0] != "anime cugan-pro"]
+            [c for c in cands if c[0] not in ON_REQUEST]
     if strict:
         return f"{why}; only {model} (requested)", picked
-    rest = [c for c in cands if c is not picked[0] and c[0] != "anime cugan-pro"]
+    rest = [c for c in cands if c is not picked[0] and c[0] not in ON_REQUEST]
     return f"{why}; {model} first (chosen from the analysis), then the approved order", picked + rest
+
+
+# models that only run when they are named: they are never part of the order that follows a pick
+ON_REQUEST = ("anime cugan-pro", "anime janai-sd", "anime janai-hd")
+
+
+def _janai(height: int) -> list:
+    """The two ONNX-only anime models as candidates at this output height (vs-mlrt; x2, or x2 scaled back)."""
+    return [("anime janai-sd", lambda: [free_sr.FreeSR(model="animejanai_sd_v1beta34", height=height, engine="mlrt")]),
+            ("anime janai-hd", lambda: [free_sr.FreeSR(model="animejanai_hd_v3_1_balanced", height=height, engine="mlrt")])]
 
 
 # Measured facts per model, for model_guide (Claude chooses from these and the frames sheet). Numbers: cartoon
@@ -168,6 +178,18 @@ MODEL_FACTS = {
                   "good": "line weight closest to the source; the only anime model that kept realistic drawn faces "
                           "(identity 0.799 vs 0.687)",
                   "weak": "less clean than anime-v3 on rough sources"},
+    "janai-sd": {"for": "anime", "speed": "fast (vs-mlrt, any DirectX 12 GPU; about 1.5x anime-v3 on one SD cut)",
+                 "good": "on short cuts of two old SD owner cartoons (2026-11-23) the sharpest lines with the paint and "
+                         "grain of the backgrounds kept; VMAF 97.7 and 99.4 against 88.5 and 97.5 for anime-v3, and "
+                         "half its added texture",
+                 "weak": "an early beta, seen on seconds, not episodes; redraws thin lines the most (eyebrows and "
+                         "mouths got heavier): compare it with try_recipes and look at faces; x2 or own size only; "
+                         "CC BY-NC-SA, personal use"},
+    "janai-hd": {"for": "anime", "speed": "fast (vs-mlrt, any DirectX 12 GPU)",
+                 "good": "on a cut of one HD owner cartoon the closest to the source: structure 0.997 against 0.992 "
+                         "(anime-v3) and 0.974 (cugan), which drew hard stripes into fine lines",
+                 "weak": "on SD sources it changes almost nothing (a high score there means it did little); seen on "
+                         "seconds, not episodes; x2 or own size only; CC BY-NC-SA, personal use"},
     "general-v3": {"for": "both", "speed": "about 7.8 fps at 720p",
                    "good": "fast; highest VMAF on cartoon ground truth (82.4) and real segments (89.4); fine without "
                            "faces and for long videos",
@@ -190,6 +212,8 @@ def _suggest(p: probe.VideoProfile, anime: bool, slow_h: float, fast_h: float) -
         if p.faces_max:
             reasons.append("faces were detected: if the frames sheet shows REALISTIC drawn faces (not stylised), "
                            "choose cugan-pro instead (it kept them: identity 0.799 vs 0.687)")
+        reasons.append("when painted backgrounds or film grain matter (old SD cartoons), try janai-sd beside it with "
+                       "try_recipes; for HD sources janai-hd: both are new here and proven on short cuts only")
     elif p.faces_max and slow_h <= FREE_NONGAN_MAX_HOURS:
         pick = "realesrnet"
         reasons.append(f"real faces and the faithful model fits the time budget (about {slow_h:.1f} h): RealESRNet "
@@ -268,6 +292,7 @@ def _plan_candidates(p: probe.VideoProfile, scale: float | None, content: str,
                 ("free general-v3", lambda: [free_sr.FreeSR(model="general_x4v3", height=p.height)])]
             if all_models:
                 cands.append(("anime cugan-pro", lambda: [video2x.AnimeSR("realcugan", "models-pro", 2, same_size=True)]))
+                cands += _janai(p.height)
             return why, cands
         if k not in (2, 3, 4):
             return f"anime/cartoon: Video2X anime models support x1 (same size), x2, x3 or x4, not x{scale:g}", []
@@ -282,6 +307,8 @@ def _plan_candidates(p: probe.VideoProfile, scale: float | None, content: str,
             # Real-CUGAN pro: closer line weight and the only anime model that passed the face check on the
             # clips of a 1991 cartoon with realistic faces (identity 0.799 vs 0.687 for anime-v3); on request only
             cands.append(("anime cugan-pro", lambda: [video2x.AnimeSR("realcugan", "models-pro", k)]))
+            if k == 2:
+                cands += _janai(h_out)
         return why + ", general-v3 third", cands
     h = out_h or p.height
     # measured on this GPU (RTX 5060 Ti): the faithful non-GAN models process ~433k input pixels/s
@@ -940,6 +967,10 @@ def recipe_candidates(p: probe.VideoProfile, rcp: dict, blocks: dict) -> tuple[s
                 continue                                    # the anime models work at whole factors only
             cands.append((spec["label"], lambda s=spec, k=k: [video2x.AnimeSR(s["processor"], s["model"], max(2, k),
                                                                              same_size=(k == 1))]))
+        elif b.runner == "onnx":
+            if (scale or 2) not in spec.get("scales", [2]):
+                continue                                    # these files enlarge x2 (own size: x2, scaled back)
+            cands.append((spec["label"], lambda s=spec: [free_sr.FreeSR(model=s["model"], height=height, engine="mlrt")]))
         else:
             cands.append((spec["label"], lambda s=spec: [free_sr.FreeSR(model=s["model"], height=height)]))
     asked = (", ".join(rcp["models"]) + (" only (asked for)" if rcp["model_strict"] else " first (chosen), then ")

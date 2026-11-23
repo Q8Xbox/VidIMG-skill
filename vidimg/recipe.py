@@ -53,7 +53,7 @@ KEYS = {"faces", "steps", "models", "model_strict", "scale", "texture", "interpo
 REBUILD_MAX = 500               # frames one recipe may name: more than that is not "a few damaged frames"
 KIND = re.compile(r"^k[1-9]\d?$")
 INTERPOLATE = (2, 3, 4)
-ANIME_MODELS = {"esrgan-v3", "cugan", "cugan-pro"}
+ANIME_MODELS = {"esrgan-v3", "cugan", "cugan-pro", "janai-sd", "janai-hd"}
 
 
 def _step(s) -> dict:
