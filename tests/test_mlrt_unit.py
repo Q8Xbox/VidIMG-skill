@@ -199,3 +199,17 @@ def test_closed_output_pipe_is_not_a_crash():
     assert mlrt_runner.write_frame(Closed(), b"x") is False and mlrt_runner.write_frame(Closed(), b"") is False
     out = io.BytesIO()
     assert mlrt_runner.write_frame(out, b"abc") and mlrt_runner.write_frame(out, b"") and out.getvalue() == b"abc"
+
+
+def test_untagged_source_is_read_with_the_matrix_players_assume(monkeypatch, tmp_path):
+    """No colour tag: BT.709 from 720 lines up, BT.601 below; a tag of its own always wins (also one kept beside
+    an intermediate file)."""
+    from vidimg import texture
+    tag = {}
+    monkeypatch.setattr(texture, "_probe_stream", lambda p: dict(tag))
+    src = tmp_path / "a.mkv"
+    assert free_sr.input_matrix(src, {}, 1080) == "bt709" and free_sr.input_matrix(src, {}, 720) == "bt709"
+    assert free_sr.input_matrix(src, {}, 576) == "bt601" and free_sr.input_matrix(src, {}, 480) == "bt601"
+    tag["color_space"] = "smpte170m"
+    assert free_sr.input_matrix(src, {}, 1080) == "bt601"
+    assert free_sr.input_matrix(src, {"color_space": "bt709"}, 480) == "bt709"
