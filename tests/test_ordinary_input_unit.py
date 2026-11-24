@@ -57,6 +57,19 @@ def test_unknown_average_frame_rate_falls_back_to_the_nominal_one(monkeypatch):
     assert avs._rate(Path("x.avi"))[0] == 0
 
 
+def test_picture_duration_not_the_audio_tail_when_the_video_stream_stores_none(monkeypatch):
+    """A NUT/Matroska intermediate stores no video-stream duration; the container's covers the audio, which ran
+    0.28 s past the picture and failed the duration gate against the MP4 source on an identical frame count."""
+    monkeypatch.setattr(media, "ffprobe", lambda: "ffprobe")
+    monkeypatch.setattr(media, "count_frames", lambda p: 40328)
+    reply = SimpleNamespace(stdout=json.dumps({"streams": [{"codec_type": "video", "avg_frame_rate": "25/1"},
+                                                           {"codec_type": "audio", "duration": "1613.4"}],
+                                               "format": {"duration": "1613.3985"}}), stderr="", returncode=0)
+    monkeypatch.setattr(media.subprocess, "run", lambda *a, **k: reply)
+    assert media.probe(Path("prepass.nut"), exact=True)["duration"] == pytest.approx(1613.12)
+    assert media.probe(Path("prepass.nut"))["duration"] == pytest.approx(1613.3985)     # not exact: unchanged
+
+
 def _plan(out: Path) -> None:
     video = {"content": "auto", "model": "realesrnet", "model_strict": False, "scale": None, "texture": None,
              "mask_tape_noise": False, "preview_only": False, "skip": False}
