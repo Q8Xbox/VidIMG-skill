@@ -230,6 +230,19 @@ def nvenc() -> bool:
     return _NVENC
 
 
+_FILTERS: str | None = None
+
+
+def has_filter(name: str) -> bool:
+    """Does this ffmpeg build have the filter? (asked once per process; False without ffmpeg)."""
+    global _FILTERS
+    if _FILTERS is None:
+        ff = shutil.which("ffmpeg")
+        _FILTERS = subprocess.run([ff, "-hide_banner", "-filters"], capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", stdin=subprocess.DEVNULL).stdout if ff else ""
+    return f" {name} " in _FILTERS
+
+
 def encoder_args(name: str) -> list[str]:
     if name not in ENCODERS:
         raise ValueError(f"unknown encoder {name!r}; known: {sorted(ENCODERS)}")

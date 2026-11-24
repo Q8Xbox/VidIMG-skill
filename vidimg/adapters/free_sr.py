@@ -182,6 +182,22 @@ def input_matrix(src: Path, colour: dict, height: int) -> str:
     return texture._matrix(colour.get("color_space") or texture._probe_stream(src).get("color_space"), height)
 
 
+def decode_filter(full: bool, matrix: str) -> str:
+    """Source pixels -> full-range rgb24 for the model, rounded. ffmpeg's default path for this conversion truncates:
+    every frame reached the model 1.1 to 1.5 luma levels darker (measured on four owner samples, 2026-11-24; with
+    these flags 0.0 against an exact converter)."""
+    return (f"scale=in_range={'full' if full else 'tv'}:out_range=full:in_color_matrix={matrix}:"
+            "flags=bicubic+accurate_rnd+full_chroma_int,format=rgb24")
+
+
+def encode_filter(hd: bool, exact: bool) -> str:
+    """The model's 16-bit RGB -> limited-range YUV. ffmpeg's own scaler comes out 0.34 luma levels too bright here
+    whatever flags it gets; zscale is exact (0.01), so it is used when this ffmpeg has it."""
+    if exact:
+        return f"format=gbrp16le,zscale=rin=full:r=limited:m={'709' if hd else '470bg'}:d=none,format=yuv444p16le"
+    return f"scale=in_range=full:out_range=tv:out_color_matrix={'bt709' if hd else 'bt601'}"
+
+
 STALL_SECONDS = 1800.0          # encoder silent this long = the worker upstream hangs (no frame takes 30 min)
 CHILD_EXIT_SECONDS = 60.0       # decoder and worker get this long to end by themselves once the encoder is gone
 
@@ -244,8 +260,7 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
     exact = _avs._rate(src)[0]
     rate = f"{exact.numerator}/{exact.denominator}" if exact else (f"{fps:g}" if fps else "30")
     dec = subprocess.Popen([ff, "-hide_banner", "-loglevel", "error", "-nostdin", *seek, "-i", str(src), "-map", "0:v:0",
-                            "-vf", f"scale=in_range={'full' if full else 'tv'}:out_range=full:in_color_matrix={in_matrix},"
-                                   "format=rgb24",
+                            "-vf", decode_filter(full, in_matrix),
                             # passthrough: every decoded frame exactly once. The default (cfr) for raw
                             # output duplicated the first frame of clips whose timestamps leave a gap
                             # (WhatsApp preview: 121 -> 122 frames), shifting every later frame by one
@@ -258,7 +273,7 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
     # HD output gets BT.709 (SD->HD matrix conversion, Doom9: convert 601->709 when SD becomes HD)
     hd = oh >= 720
     matrix = "bt709" if hd else ("bt470bg" if colour.get("color_space") in (None, "bt470bg", "smpte170m") else colour["color_space"])
-    vf = f"scale=in_range=full:out_range=tv:out_color_matrix={'bt709' if hd else 'bt601'}" + (f",{post_vf}" if post_vf else "")
+    vf = encode_filter(hd, media.has_filter("zscale")) + (f",{post_vf}" if post_vf else "")
     # the raw pipe has no pixel aspect: keep the source's display aspect (PAL 16:15 came out 1:1, shown 5:4)
     from fractions import Fraction
     sn, sd = (int(x) for x in info.get("sar", "1:1").split(":"))
