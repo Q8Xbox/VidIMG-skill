@@ -104,6 +104,12 @@ def probe(path: Path, exact: bool = False) -> dict:
                 duration -= start
             elif fps and abs(counted / fps - duration) > max(1.0, 0.02 * duration):
                 duration = counted / fps          # container duration stretched by another stream (subtitles)
+            elif fps and not v.get("duration"):
+                # The video stream stores no duration of its own (NUT, Matroska): the container's then also
+                # covers an audio track that runs a little longer than the picture, and measured against a
+                # source whose video stream does store one (MP4: 1613.12 s video, 1613.42 s audio) it failed
+                # the duration gate on an identical frame count. Measure the picture itself.
+                duration = counted / fps
     return {
         "width": v.get("width"), "height": v.get("height"), "fps": round(fps, 4), "frames": frames,
         "duration": duration, "codec": v.get("codec_name"), "pix_fmt": v.get("pix_fmt"),
