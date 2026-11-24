@@ -53,6 +53,11 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   nothing invented, the lines stay as sharp as the model made them) and the result is encoded with x265's grain
   tune, because the hardware HEVC encoder flattened low-contrast texture by itself. The guard and the reports
   show the flat area between the lines against a plain upscale.
+- **Colour and brightness kept through the open models:** a source without a colour tag is read the way players
+  show it (BT.709 from 720 lines up, BT.601 below; its own tag always wins), where FFmpeg's default read HD as
+  BT.601 and turned skin towards pink. The conversions to and from the model's RGB are rounded: FFmpeg's default
+  truncates and left every frame 1.1 to 1.5 levels of 255 darker. The way back uses zscale when the installed
+  FFmpeg has it (0.01 from exact); without it the result is about 0.3 levels brighter than the source.
 - **Automatic flow:** `survey_media` → `decide_plan` → `run_plan` (CLI `auto`, `run-plan`): give it any mix of
   photos, videos and series folders. It sorts and analyses everything, fills in a decision per item (content,
   model, scale, texture) with reasons, and shows all videos on a few contact sheets so Claude confirms "drawn or
@@ -89,7 +94,9 @@ input (odd file names, rotated photos, non-Latin paths) no longer stops a run. W
   - **Damaged frames.** The survey lists single frames that show something neither neighbour shows, and a sheet
     shows the largest between their neighbours. Tape tearing and dropouts look like that; so do a flash, lightning
     or a blink, drawn on purpose, and no measurement tells them apart, so whoever supervises looks and names the
-    damaged ones. No model restores a torn frame. On request (`rebuild_damaged`) the named frames are made again
+    damaged ones. Candidates that read like tape damage (far more outlier pixels than the frames around them) are
+    marked and shown first; it is a hint for where to look, with thresholds from three videos, and nothing is made
+    again because of it. No model restores a torn frame. On request (`rebuild_damaged`) the named frames are made again
     from their two neighbours by RIFE, in the second file only; its check confirms every other frame is unchanged
     and that the made frames stand out less than the ones they replace. Two or three damaged frames in a row (up
     to six where the scene holds still) are found as a run and made from the sound frames either side of it; and only the part of a frame that differs
@@ -243,19 +250,21 @@ marker, so a later survey of a parent folder does not take its work files for yo
 ## Tests
 
 ```bash
-python -m pytest            # about 200 unit tests, half a minute
+python -m pytest            # about 330 tests: under a minute without FFmpeg, about four minutes with it
 ```
 
-No GPU, models, FFmpeg or media files are needed: the engines are replaced by stubs. The same suite runs on
-GitHub for every pull request and every push to `main` (Windows, Python 3.14). Ten image-guard tests need a
-private benchmark photo and skip without it.
+No GPU, models, FFmpeg or media files are needed: the engines are replaced by stubs. With FFmpeg on the path a
+few more tests run real conversions on generated frames. The same suite runs on GitHub for every pull request
+and every push to `main` (Windows, Python 3.14, no FFmpeg). Tests that need FFmpeg or a private benchmark photo
+skip without them.
 
 ## Known limits
 
 - **Variable frame rate** (many phone clips): the result is written at a constant rate. The guard warns when
   frames moved in time (`timing`), but the drift itself is not corrected.
-- **HD footage that needs a pre-pass** (interlaced or telecined HD): the model may read it with the SD colour
-  matrix. Not yet fixed; SD sources and progressive HD are not affected.
+- **HD footage that needs a pre-pass** (interlaced or telecined HD): by the rule above the open models
+  now read it with the HD colour matrix, but no such footage has been run since. The Video2X anime models go
+  through another path, which has not been checked on it either.
 - **Several newer guard limits are chosen values, not calibrated ones:** the sampling density, the flicker and
   timing limits, and the calibration ranges. They behaved correctly on the owner's samples.
 - **`.heic` photos** are not supported; convert them first.
