@@ -173,6 +173,15 @@ class FreeSR:
         return f"free:{self.model}" + (f":h={self.height}" if self.height else "") + (f":x{self.scale:g}" if self.scale else "")
 
 
+def input_matrix(src: Path, colour: dict, height: int) -> str:
+    """The matrix the source's pixels are read with. Its own tag when it has one; without a tag, what every player
+    assumes: BT.709 from 720 lines up, BT.601 below. ffmpeg's own default is BT.601 at any size, which read an
+    untagged 1440x1080 cartoon wrongly and then wrote it as BT.709: skin turned from orange towards pink (owner
+    episode, 2026-11-24; the colour gate saw 2.9 and passed it)."""
+    from .. import texture
+    return texture._matrix(colour.get("color_space") or texture._probe_stream(src).get("color_space"), height)
+
+
 STALL_SECONDS = 1800.0          # encoder silent this long = the worker upstream hangs (no frame takes 30 min)
 CHILD_EXIT_SECONDS = 60.0       # decoder and worker get this long to end by themselves once the encoder is gone
 
@@ -201,6 +210,7 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
     colour = colour if colour is not None else (media.colour_hint(src) or
                                                 {k: info.get(k) for k in ("color_primaries", "color_transfer") if info.get(k)})
     full = colour.get("color_range") in ("pc", "jpeg") or str(info.get("pix_fmt", "")).startswith("yuvj")
+    in_matrix = input_matrix(src, colour, h)
     from .. import mlrt_install
     fetched = mlrt_install.downloads().get(st.model)
     heavy = not fetched and not manifest()[st.model]["training"].endswith("compact")
@@ -234,7 +244,8 @@ def run(src: Path, dst: Path, stages: list, encoder: str = "hevc10", *,
     exact = _avs._rate(src)[0]
     rate = f"{exact.numerator}/{exact.denominator}" if exact else (f"{fps:g}" if fps else "30")
     dec = subprocess.Popen([ff, "-hide_banner", "-loglevel", "error", "-nostdin", *seek, "-i", str(src), "-map", "0:v:0",
-                            "-vf", f"scale=in_range={'full' if full else 'tv'}:out_range=full,format=rgb24",
+                            "-vf", f"scale=in_range={'full' if full else 'tv'}:out_range=full:in_color_matrix={in_matrix},"
+                                   "format=rgb24",
                             # passthrough: every decoded frame exactly once. The default (cfr) for raw
                             # output duplicated the first frame of clips whose timestamps leave a gap
                             # (WhatsApp preview: 121 -> 122 frames), shifting every later frame by one
