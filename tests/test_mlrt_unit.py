@@ -213,3 +213,46 @@ def test_untagged_source_is_read_with_the_matrix_players_assume(monkeypatch, tmp
     tag["color_space"] = "smpte170m"
     assert free_sr.input_matrix(src, {}, 1080) == "bt601"
     assert free_sr.input_matrix(src, {"color_space": "bt709"}, 480) == "bt709"
+
+
+def test_conversion_filters_round_and_use_zscale_only_when_asked():
+    dec = free_sr.decode_filter(False, "bt709")
+    assert "accurate_rnd" in dec and "full_chroma_int" in dec and "in_range=tv" in dec and dec.endswith("format=rgb24")
+    assert "in_range=full" in free_sr.decode_filter(True, "bt601") and "in_color_matrix=bt601" in free_sr.decode_filter(True, "bt601")
+    assert "zscale" not in free_sr.encode_filter(True, False) and "out_color_matrix=bt601" in free_sr.encode_filter(False, False)
+    assert "m=709" in free_sr.encode_filter(True, True) and "m=470bg" in free_sr.encode_filter(False, True)
+
+
+def test_has_filter_is_false_without_ffmpeg(monkeypatch):
+    from vidimg import media
+    monkeypatch.setattr(media, "_FILTERS", None)
+    monkeypatch.setattr(media.shutil, "which", lambda name: None)
+    assert media.has_filter("zscale") is False
+
+
+@pytest.mark.parametrize("exact", [True, False])
+def test_grey_ramp_keeps_its_brightness_through_both_conversions(exact):
+    """Every luma level through the decoder filter, an identity model and the encoder filter: no drift. The default
+    conversion lost 0.4 here on 8-bit grey and 1.1 to 1.5 on real pictures."""
+    import shutil
+    import subprocess
+    from vidimg import media
+    ff = shutil.which("ffmpeg")
+    if not ff or (exact and not media.has_filter("zscale")):
+        pytest.skip("needs ffmpeg" + (" with zscale" if exact else ""))
+    w, h = 880, 64
+    y = np.tile(np.repeat(np.arange(16, 236), 4).astype(np.uint8), (h, 1))
+    uv = np.full((h // 2, w // 2), 128, np.uint8)
+
+    def run(args, data):
+        return subprocess.run([ff, "-hide_banner", "-loglevel", "error", *args], input=data, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, check=True).stdout
+
+    rgb = np.frombuffer(run(["-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", f"{w}x{h}", "-i", "pipe:0", "-vf",
+                             free_sr.decode_filter(False, "bt709"), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                            y.tobytes() + uv.tobytes() * 2), np.uint8)
+    assert abs(float((rgb.reshape(h, w, 3)[..., 1] - (y - 16.0) * 255 / 219).mean())) < 0.05      # rounded, not truncated
+    out = np.frombuffer(run(["-f", "rawvideo", "-pix_fmt", "rgb48le", "-s", f"{w}x{h}", "-i", "pipe:0", "-vf",
+                             free_sr.encode_filter(True, exact), "-f", "rawvideo", "-pix_fmt", "yuv420p10le", "-"],
+                            (rgb.astype(np.uint16) * 257).astype("<u2").tobytes()), "<u2")[: w * h].reshape(h, w) / 4.0
+    assert abs(float((out - y).mean())) < (0.05 if exact else 0.5)
